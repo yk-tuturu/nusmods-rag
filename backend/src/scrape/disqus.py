@@ -81,26 +81,61 @@ PILOT_COURSE_CODES = [
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 RAW_DIR = BACKEND_DIR / "data" / "raw"
+FAILURES_PATH = BACKEND_DIR / "data" / "scrape_state" / "disqus_failures.json"
 API_BASE = "https://disqus.com/api/3.0"
 
 PAGINATION_DELAY_SECS = 0.5
 BETWEEN_COURSE_DELAY_SECS = 1.0
 
+# Once remaining calls drops to this or below, ease off / treat a failure as
+# quota exhaustion rather than a real error.
+RATE_LIMIT_BUFFER = 5
+# Small safety margin added past Disqus's reported reset time, in case of
+# clock skew between us and their server.
+RATE_LIMIT_RESET_MARGIN_SECS = 5
+
+
+def _disqus_get(url: str, params: dict) -> dict:
+    """GET against the Disqus API, rate-limit aware. Disqus reports
+    X-Ratelimit-Remaining/-Reset on every response, including error ones -
+    once the hourly cap is hit it returns a plain 400 rather than a 429, so
+    the remaining-count header (not just the status code) is what actually
+    tells us whether a failure is quota exhaustion or a real error."""
+    resp = requests.get(url, params=params, timeout=15)
+    remaining = resp.headers.get("X-Ratelimit-Remaining")
+    reset_at = resp.headers.get("X-Ratelimit-Reset")
+
+    if resp.status_code >= 400:
+        quota_exhausted = resp.status_code == 429 or (
+            remaining is not None and int(remaining) <= RATE_LIMIT_BUFFER
+        )
+        if quota_exhausted:
+            wait_secs = (
+                max(0, int(reset_at) - time.time()) + RATE_LIMIT_RESET_MARGIN_SECS
+                if reset_at else 3600  # no reset header to go on - fall back to a full hour
+            )
+            print(f"  -> Disqus rate limit hit (remaining={remaining}), "
+                  f"sleeping {wait_secs:.0f}s until reset...")
+            time.sleep(wait_secs)
+            resp = requests.get(url, params=params, timeout=15)
+        # else: a real error (quota wasn't the issue) - fall through to
+        # raise_for_status() below and let the caller record it as a failure.
+    elif remaining is not None and int(remaining) <= RATE_LIMIT_BUFFER:
+        # Succeeded, but we're close to the cap - ease off before the next call.
+        time.sleep(2)
+
+    resp.raise_for_status()
+    return resp.json()
+
 
 def find_thread_id(course_code: str) -> str | None:
     """Look up the Disqus thread ID for a course using its identifier
     (e.g. 'CS2030'), which is more reliable than matching on the exact URL."""
-    resp = requests.get(
-        f"{API_BASE}/threads/list.json",
-        params={
-            "api_key": DISQUS_PUBLIC_KEY,
-            "forum": DISQUS_SHORTNAME,
-            "thread": f"ident:{course_code}",
-        },
-        timeout=15,
-    )
-    resp.raise_for_status()
-    data = resp.json()
+    data = _disqus_get(f"{API_BASE}/threads/list.json", {
+        "api_key": DISQUS_PUBLIC_KEY,
+        "forum": DISQUS_SHORTNAME,
+        "thread": f"ident:{course_code}",
+    })
     results = data.get("response", [])
     if not results:
         return None
@@ -122,10 +157,7 @@ def fetch_all_posts(thread_id: str) -> list[dict]:
         if cursor:
             params["cursor"] = cursor
 
-        resp = requests.get(f"{API_BASE}/threads/listPosts.json", params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-
+        data = _disqus_get(f"{API_BASE}/threads/listPosts.json", params)
         posts.extend(data.get("response", []))
 
         cursor_info = data.get("cursor", {})
@@ -177,6 +209,28 @@ def is_fresh(path: Path, max_age_days: float) -> bool:
     return age_secs < max_age_days * 86400
 
 
+def load_failures() -> dict:
+    if FAILURES_PATH.exists():
+        try:
+            return json.loads(FAILURES_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_failures(failures: dict) -> None:
+    FAILURES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FAILURES_PATH.write_text(json.dumps(failures, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def record_failure(failures: dict, course_code: str, error: Exception) -> None:
+    entry = failures.get(course_code, {"attempts": 0})
+    entry["attempts"] = entry.get("attempts", 0) + 1
+    entry["error"] = str(error)
+    entry["last_tried"] = datetime.now(timezone.utc).isoformat()
+    failures[course_code] = entry
+
+
 def save_raw(course_code: str, metadata: dict | None, reviews: list[dict]) -> Path:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     path = raw_path(course_code)
@@ -218,6 +272,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--courses", help="comma-separated course codes to scrape")
     parser.add_argument("--all", action="store_true", help="scrape the full NUSMods catalog")
+    parser.add_argument("--retry-failed", action="store_true",
+                         help="only (re-)scrape courses recorded in disqus_failures.json")
     parser.add_argument("--force", action="store_true", help="re-scrape even if cache is fresh")
     parser.add_argument("--max-age-days", type=float, default=7.0,
                          help="skip re-scraping if cached copy is younger than this (default 7)")
@@ -226,7 +282,14 @@ def main():
     if DISQUS_PUBLIC_KEY == "YOUR_PUBLIC_KEY_HERE":
         raise SystemExit("Set DISQUS_PUBLIC_KEY before running (see docstring for setup).")
 
-    if args.all:
+    failures = load_failures()
+
+    if args.retry_failed:
+        course_codes = sorted(failures.keys())
+        if not course_codes:
+            print("No recorded failures to retry.")
+            return
+    elif args.all:
         course_codes = nusmods_api.fetch_all_module_codes()
     elif args.courses:
         course_codes = [c.strip().upper() for c in args.courses.split(",") if c.strip()]
@@ -237,10 +300,22 @@ def main():
 
     for i, course_code in enumerate(course_codes):
         print(f"[{i + 1}/{len(course_codes)}] Processing {course_code}...")
-        scrape_course(course_code, force=args.force, max_age_days=args.max_age_days)
+        try:
+            scrape_course(course_code, force=args.force, max_age_days=args.max_age_days)
+        except Exception as e:
+            print(f"  ! failed: {e}")
+            record_failure(failures, course_code, e)
+            save_failures(failures)
+        else:
+            if course_code in failures:
+                del failures[course_code]
+                save_failures(failures)
 
         if i < len(course_codes) - 1:
             time.sleep(BETWEEN_COURSE_DELAY_SECS)
+
+    if failures:
+        print(f"\n{len(failures)} course(s) failed - rerun with --retry-failed to retry just those.")
 
 
 if __name__ == "__main__":

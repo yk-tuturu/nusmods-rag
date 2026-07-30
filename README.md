@@ -33,7 +33,21 @@ the full catalog:
 ```bash
 ./refresh.sh --courses CS2030,CS2040
 ./refresh.sh --all          # full NUSMods catalog — slow, mind Disqus's ToS
+./refresh.sh --retry-failed # (re-)scrape only courses that failed last run
 ```
+
+Before a full `--all` run, warm the NUSMods metadata cache first — it has
+no rate limit and doesn't depend on Disqus, so this keeps that scrape's
+only network calls the (rate-limited) Disqus ones:
+
+```bash
+python src/scrape/nusmods_api.py --prefetch
+```
+
+If `--all`/`--retry-failed` gets interrupted (e.g. Disqus's 1000
+calls/hour cap), it's safe to just rerun — already-scraped courses are
+skipped (see `--max-age-days`), and failures are recorded to
+`data/scrape_state/disqus_failures.json` for `--retry-failed` to pick up.
 
 Run the API:
 
@@ -76,3 +90,14 @@ re-embed without re-scraping).
   API cost. Generation uses OpenAI (`gpt-4o-mini` by default, configurable
   via `OPENAI_MODEL`).
 - Course code detection in queries uses the pattern `[A-Z]{2,3}\d{4}[A-Z]?`.
+- Prerequisites are rendered from NUSMods' structured `prereqTree` (exact
+  and/or logic over module codes + minimum grades) rather than its free-text
+  description where available, and the raw tree is also kept in Chroma
+  metadata for exact checking rather than relying on prose an LLM retrieved.
+- Retrieval ranks primarily by semantic similarity, then nudges newer and
+  non-reply-thread review chunks slightly ahead of older/reply-chain ones
+  of similar relevance (see `rag/retriever.py`).
+- Disqus scraping is rate-limit aware (reads Disqus's `X-Ratelimit-*`
+  headers to pause/retry across the reset boundary) and resumable — a
+  failing course is recorded rather than aborting the whole run; see
+  `--retry-failed` above.

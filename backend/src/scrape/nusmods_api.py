@@ -9,6 +9,14 @@ Fetches course (module) metadata from the public NUSMods API
 Results are cached to disk (data/.cache/nusmods/<acadYear>/) since the
 catalog barely changes within an academic year and re-fetching ~4000
 module detail files on every run is wasteful and slow.
+
+USAGE
+-----
+python nusmods_api.py              # just list module codes for the current academic year
+python nusmods_api.py --prefetch   # warm the cache for every module's full detail blob
+                                    # (has no rate limit, unlike Disqus - run this before a
+                                    # full disqus.py --all pass so that pass never has to hit
+                                    # NUSMods over the network)
 """
 
 from __future__ import annotations
@@ -16,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 
@@ -188,9 +197,61 @@ def fetch_module_summaries(
     return summaries
 
 
+def prefetch_all_module_details(
+    academic_year: str | None = None, max_workers: int = 8, force: bool = False
+) -> None:
+    """Warm the on-disk cache with every module's full detail blob (title,
+    description, prereqTree, etc). Unlike Disqus's 1000/hour cap, NUSMods
+    has no documented rate limit and this doesn't touch Disqus at all, so
+    it's safe to parallelize and safe to run well ahead of a Disqus scrape
+    pass - that pass's own fetch_module_detail() calls then hit a warm
+    cache with zero network calls, keeping the two failure domains (Disqus
+    quota vs NUSMods availability) fully separate."""
+    academic_year = academic_year or current_academic_year()
+    codes = fetch_all_module_codes(academic_year, force=force)
+    print(f"Prefetching details for {len(codes)} modules ({academic_year})...")
+
+    done = 0
+    failed = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(fetch_module_detail, code, academic_year, force): code
+            for code in codes
+        }
+        for future in as_completed(futures):
+            code = futures[future]
+            try:
+                future.result()
+            except requests.RequestException as e:
+                print(f"  ! {code}: {e}")
+                failed.append(code)
+            done += 1
+            if done % 500 == 0 or done == len(codes):
+                print(f"  {done}/{len(codes)} done")
+
+    if failed:
+        print(f"Prefetch complete with {len(failed)} failure(s): {failed}")
+    else:
+        print("Prefetch complete.")
+
+
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--prefetch", action="store_true",
+                         help="fetch + cache full module detail for the entire catalog")
+    parser.add_argument("--force", action="store_true", help="refetch even if already cached")
+    parser.add_argument("--max-workers", type=int, default=8,
+                         help="concurrent requests for --prefetch (default 8)")
+    args = parser.parse_args()
+
     ay = current_academic_year()
     print(f"Academic year: {ay}")
-    codes = fetch_all_module_codes(ay)
-    print(f"Found {len(codes)} modules")
-    print(codes[:10])
+
+    if args.prefetch:
+        prefetch_all_module_details(ay, max_workers=args.max_workers, force=args.force)
+    else:
+        codes = fetch_all_module_codes(ay)
+        print(f"Found {len(codes)} modules")
+        print(codes[:10])
