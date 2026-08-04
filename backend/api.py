@@ -11,6 +11,7 @@ uvicorn api:app --reload --port 8000
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -24,9 +25,11 @@ PROCESSED_DIR = BACKEND_DIR / "data" / "processed"
 
 app = FastAPI(title="NUSMods Course Review RAG API")
 
+allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

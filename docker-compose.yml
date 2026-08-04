@@ -1,0 +1,49 @@
+# Production compose file — pulls pre-built images from GHCR rather than
+# building on the VM (the VM is small; building sentence-transformers/torch
+# and the Next.js frontend on it is slow and memory-hungry compared to doing
+# it on a GitHub Actions runner and just pulling the finished image).
+#
+# For local development, use `docker compose -f docker-compose.dev.yml up`
+# instead, which builds from source.
+
+services:
+  backend:
+    image: ghcr.io/OWNER/nusmod-backend:latest
+    env_file:
+      - ./backend/.env
+    environment:
+      ALLOWED_ORIGINS: https://app.example.com
+    volumes:
+      - ./backend/data:/app/data
+    restart: unless-stopped
+    networks:
+      - internal
+
+  frontend:
+    image: ghcr.io/OWNER/nusmod-frontend:latest
+    restart: unless-stopped
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      - backend
+      - frontend
+
+networks:
+  internal:
+
+volumes:
+  caddy_data:
+  caddy_config:

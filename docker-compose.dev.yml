@@ -1,0 +1,23 @@
+# Local dev — builds from source instead of pulling from GHCR.
+# Usage: docker compose -f docker-compose.dev.yml up --build
+
+services:
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - ./backend/.env
+    environment:
+      ALLOWED_ORIGINS: http://localhost:3000
+    volumes:
+      - ./backend/data:/app/data
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
