@@ -6,21 +6,35 @@
 # For local development, use `docker compose -f docker-compose.dev.yml up`
 # instead, which builds from source.
 
+# Anchor holding everything the backend image needs, reused by both the
+# always-on API service and the on-demand scraper below so they don't drift.
+x-backend-image: &backend-image
+  image: ghcr.io/yk-tuturu/nusmod-backend:latest
+  env_file:
+    - ./backend/.env
+  volumes:
+    - ./backend/data:/app/data
+  networks:
+    - internal
+
 services:
   backend:
-    image: ghcr.io/OWNER/nusmod-backend:latest
-    env_file:
-      - ./backend/.env
+    <<: *backend-image
     environment:
-      ALLOWED_ORIGINS: https://app.example.com
-    volumes:
-      - ./backend/data:/app/data
+      ALLOWED_ORIGINS: https://nusadvice.ykkoh.com
     restart: unless-stopped
-    networks:
-      - internal
+
+  # Not part of `docker compose up` — the "tools" profile means this only
+  # starts when explicitly asked for, e.g.:
+  #   docker compose run --rm scraper
+  #   docker compose run --rm scraper --courses CS2030,CS2040
+  scraper:
+    <<: *backend-image
+    entrypoint: ["./refresh.sh"]
+    profiles: ["tools"]
 
   frontend:
-    image: ghcr.io/OWNER/nusmod-frontend:latest
+    image: ghcr.io/yk-tuturu/nusmod-frontend:latest
     restart: unless-stopped
     networks:
       - internal

@@ -35,7 +35,7 @@ jobs:
           context: ./frontend
           push: true
           build-args: |
-            NEXT_PUBLIC_API_URL=https://api.example.com
+            NEXT_PUBLIC_API_URL=https://api.ykkoh.com
           tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/nusmod-frontend:latest
 
   deploy:
@@ -49,7 +49,7 @@ jobs:
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
           script: |
-            cd ~/nusmod-rag
+            cd ~/nusmods-rag
             docker compose pull
             docker compose up -d
             docker image prune -f

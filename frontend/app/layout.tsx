@@ -1,20 +1,26 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
+import Script from "next/script";
+import TopNav from "@/components/layout/TopNav";
+import BottomNav from "@/components/layout/BottomNav";
+import { THEME_INIT_SCRIPT } from "@/lib/theme";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-jetbrains-mono",
   subsets: ["latin"],
+  weight: ["400", "500", "600"],
 });
 
 export const metadata: Metadata = {
-  title: "NUSMods Course Review Chat",
-  description: "Ask questions about NUS courses, grounded in student reviews.",
+  title: "NUS AI Advisor",
+  description:
+    "Navigate your academic journey with AI precision — module planning, prerequisites, and course reviews grounded in NUSMods data.",
 };
 
 export default function RootLayout({
@@ -25,9 +31,21 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <head>
+        <Script
+          id="theme-init"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }}
+        />
+      </head>
+      <body className="min-h-full flex flex-col bg-background text-on-background font-sans">
+        <TopNav />
+        <div className="flex-1 flex flex-col pb-16 lg:pb-0">{children}</div>
+        <BottomNav />
+      </body>
     </html>
   );
 }

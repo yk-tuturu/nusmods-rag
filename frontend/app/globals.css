@@ -1,26 +1,190 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  /* Fonts */
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* Colors — NUS AI Advisor design system */
+  --color-primary: #944a00;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #ef7c00;
+  --color-on-primary-container: #532700;
+  --color-primary-fixed: #ffdcc5;
+  --color-primary-fixed-dim: #ffb783;
+  --color-on-primary-fixed: #301400;
+  --color-on-primary-fixed-variant: #713700;
+  --color-inverse-primary: #ffb783;
+  --color-surface-tint: #944a00;
+
+  --color-secondary: #325e9f;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #8eb7fe;
+  --color-on-secondary-container: #144786;
+  --color-secondary-fixed: #d6e3ff;
+  --color-secondary-fixed-dim: #a9c7ff;
+  --color-on-secondary-fixed: #001b3d;
+  --color-on-secondary-fixed-variant: #134685;
+
+  --color-tertiary: #00629e;
+  --color-on-tertiary: #ffffff;
+  --color-tertiary-container: #00a1fe;
+  --color-on-tertiary-container: #003558;
+  --color-tertiary-fixed: #cfe5ff;
+  --color-tertiary-fixed-dim: #99cbff;
+  --color-on-tertiary-fixed: #001d34;
+  --color-on-tertiary-fixed-variant: #004a78;
+
+  --color-error: #ba1a1a;
+  --color-on-error: #ffffff;
+  --color-error-container: #ffdad6;
+  --color-on-error-container: #93000a;
+  --color-error-red: #ff5138;
+
+  --color-success-green: #d4edda;
+
+  --color-background: #f6faff;
+  --color-on-background: #141d23;
+  --color-surface: #f6faff;
+  --color-surface-dim: #d2dbe4;
+  --color-surface-bright: #f6faff;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #ecf5fe;
+  --color-surface-container: #e6eff8;
+  --color-surface-container-high: #e0e9f2;
+  --color-surface-container-highest: #dbe4ed;
+  --color-on-surface: #141d23;
+  --color-on-surface-variant: #574335;
+  --color-surface-variant: #dbe4ed;
+  --color-outline: #8a7263;
+  --color-outline-variant: #ddc1af;
+  --color-inverse-surface: #293138;
+  --color-inverse-on-surface: #e9f2fb;
+
+  /* Spacing scale (design system 8px grid) */
+  --spacing-base: 4px;
+  --spacing-xs: 8px;
+  --spacing-sm: 16px;
+  --spacing-gutter: 16px;
+  --spacing-md: 24px;
+  --spacing-lg: 32px;
+  --spacing-xl: 48px;
+  --spacing-margin-mobile: 16px;
+  --spacing-margin-desktop: 64px;
+
+  /* Radius */
+  --radius-sm: 0.125rem;
+  --radius-DEFAULT: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-full: 9999px;
+
+  /* Typography scale */
+  --text-headline-lg: 32px;
+  --text-headline-lg--line-height: 40px;
+  --text-headline-lg--letter-spacing: -0.02em;
+  --text-headline-lg--font-weight: 700;
+
+  --text-headline-lg-mobile: 26px;
+  --text-headline-lg-mobile--line-height: 32px;
+  --text-headline-lg-mobile--font-weight: 700;
+
+  --text-headline-md: 24px;
+  --text-headline-md--line-height: 32px;
+  --text-headline-md--letter-spacing: -0.01em;
+  --text-headline-md--font-weight: 600;
+
+  --text-headline-sm: 20px;
+  --text-headline-sm--line-height: 28px;
+  --text-headline-sm--font-weight: 600;
+
+  --text-body-lg: 18px;
+  --text-body-lg--line-height: 28px;
+  --text-body-lg--font-weight: 400;
+
+  --text-body-md: 16px;
+  --text-body-md--line-height: 24px;
+  --text-body-md--font-weight: 400;
+
+  --text-body-sm: 14px;
+  --text-body-sm--line-height: 20px;
+  --text-body-sm--font-weight: 400;
+
+  --text-label-md: 14px;
+  --text-label-md--line-height: 16px;
+  --text-label-md--font-weight: 500;
+
+  --text-label-sm: 12px;
+  --text-label-sm--line-height: 14px;
+  --text-label-sm--font-weight: 500;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+/* Dark theme — Material 3 palette from the NUSMod AI Guide Stitch design system */
+:root.dark {
+  --color-primary: #ffb783;
+  --color-on-primary: #4f2500;
+  --color-primary-container: #ef7c00;
+  --color-on-primary-container: #532700;
+  --color-primary-fixed: #ffdcc5;
+  --color-primary-fixed-dim: #ffb783;
+  --color-on-primary-fixed: #301400;
+  --color-on-primary-fixed-variant: #713700;
+  --color-inverse-primary: #944a00;
+  --color-surface-tint: #ffb783;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-secondary: #b7c9d8;
+  --color-on-secondary: #21323e;
+  --color-secondary-container: #3a4b58;
+  --color-on-secondary-container: #a9bbca;
+  --color-secondary-fixed: #d3e5f4;
+  --color-secondary-fixed-dim: #b7c9d8;
+  --color-on-secondary-fixed: #0b1d28;
+  --color-on-secondary-fixed-variant: #384955;
+
+  --color-tertiary: #98cbff;
+  --color-on-tertiary: #003354;
+  --color-tertiary-container: #00a2fd;
+  --color-on-tertiary-container: #003659;
+  --color-tertiary-fixed: #cfe5ff;
+  --color-tertiary-fixed-dim: #98cbff;
+  --color-on-tertiary-fixed: #001d33;
+  --color-on-tertiary-fixed-variant: #004a77;
+
+  --color-error: #ffb4ab;
+  --color-on-error: #690005;
+  --color-error-container: #93000a;
+  --color-on-error-container: #ffdad6;
+
+  --color-background: #0b141b;
+  --color-on-background: #dae3ee;
+  --color-surface: #0b141b;
+  --color-surface-dim: #0b141b;
+  --color-surface-bright: #313a42;
+  --color-surface-container-lowest: #060f16;
+  --color-surface-container-low: #141d24;
+  --color-surface-container: #182128;
+  --color-surface-container-high: #222b33;
+  --color-surface-container-highest: #2d363e;
+  --color-on-surface: #dae3ee;
+  --color-on-surface-variant: #ddc1af;
+  --color-surface-variant: #2d363e;
+  --color-outline: #a58c7c;
+  --color-outline-variant: #574335;
+  --color-inverse-surface: #dae3ee;
+  --color-inverse-on-surface: #293139;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-background);
+  color: var(--color-on-background);
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }

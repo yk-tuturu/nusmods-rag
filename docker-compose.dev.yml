@@ -1,18 +1,26 @@
 # Local dev — builds from source instead of pulling from GHCR.
 # Usage: docker compose -f docker-compose.dev.yml up --build
 
+x-backend-image: &backend-image
+  build:
+    context: ./backend
+  env_file:
+    - ./backend/.env
+  volumes:
+    - ./backend/data:/app/data
+
 services:
   backend:
-    build:
-      context: ./backend
-    env_file:
-      - ./backend/.env
+    <<: *backend-image
     environment:
       ALLOWED_ORIGINS: http://localhost:3000
-    volumes:
-      - ./backend/data:/app/data
     ports:
       - "8000:8000"
+
+  scraper:
+    <<: *backend-image
+    entrypoint: ["./refresh.sh"]
+    profiles: ["tools"]
 
   frontend:
     build:

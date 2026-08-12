@@ -2,41 +2,41 @@
 
 import { useState } from "react";
 import type { SourceChunk } from "@/lib/api";
+import Icon from "@/components/Icon";
 
 export default function SourceCitations({ sources }: { sources: SourceChunk[] }) {
   const [expanded, setExpanded] = useState(false);
-
-  if (sources.length === 0) return null;
 
   const courseCodes = Array.from(
     new Set(sources.map((s) => s.course_code).filter(Boolean))
   );
 
   return (
-    <div className="mt-2 text-sm">
+    <div className="mt-xs">
       <button
         onClick={() => setExpanded((e) => !e)}
-        className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 underline underline-offset-2"
+        className="font-label-sm text-label-sm font-mono text-secondary hover:underline flex items-center gap-1 w-max"
       >
-        {expanded ? "Hide" : "Show"} sources ({sources.length} chunk
-        {sources.length === 1 ? "" : "s"}
-        {courseCodes.length > 0 ? ` — ${courseCodes.join(", ")}` : ""})
+        <Icon name="description" size={14} />
+        Source: {sources.length} review chunk{sources.length === 1 ? "" : "s"}
+        {courseCodes.length > 0 ? ` — ${courseCodes.join(", ")}` : ""}
+        <Icon name={expanded ? "expand_less" : "expand_more"} size={14} />
       </button>
 
       {expanded && (
-        <ul className="mt-2 space-y-2">
+        <ul className="mt-xs space-y-xs">
           {sources.map((s, i) => (
             <li
               key={i}
-              className="rounded-md border border-zinc-200 dark:border-zinc-700 p-2 bg-zinc-50 dark:bg-zinc-900"
+              className="rounded-lg border border-outline-variant p-sm bg-surface-bright"
             >
-              <div className="flex flex-wrap gap-x-2 text-xs text-zinc-500 mb-1">
-                {s.course_code && <span className="font-medium">{s.course_code}</span>}
+              <div className="flex flex-wrap gap-x-2 font-label-sm text-label-sm font-mono text-on-surface-variant mb-1">
+                {s.course_code && <span className="font-bold text-primary">{s.course_code}</span>}
                 {s.chunk_type && <span>[{s.chunk_type}]</span>}
                 {s.date && <span>{s.date}</span>}
                 {typeof s.likes === "number" && s.likes > 0 && <span>{s.likes} likes</span>}
               </div>
-              <p className="text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">
+              <p className="font-body-sm text-body-sm text-on-surface-variant whitespace-pre-wrap">
                 {s.text.length > 400 ? `${s.text.slice(0, 400)}…` : s.text}
               </p>
             </li>
