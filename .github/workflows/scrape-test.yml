@@ -1,0 +1,40 @@
+name: Scrape (test)
+
+# Manual only — runs the pipeline against a small fixed course list and
+# uploads the result as a downloadable artifact. Never touches the VM.
+on:
+  workflow_dispatch: {}
+
+env:
+  REGISTRY: ghcr.io
+  TEST_COURSES: CS2030S,CS2040S,CS1101S,MA1521,MA1522,GEA1000,CS2103T
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull backend image
+        run: docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/nusmod-backend:latest
+
+      - name: Run scrape -> clean -> chunk -> embed for the test course list
+        run: |
+          mkdir -p data
+          docker run --rm \
+            -v ${{ github.workspace }}/data:/app/data \
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/nusmod-backend:latest \
+            ./refresh.sh --courses ${{ env.TEST_COURSES }}
+
+      - name: Upload result for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-scrape-data
+          path: data/
+          retention-days: 7

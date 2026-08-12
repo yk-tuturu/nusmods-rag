@@ -1,3 +1,5 @@
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { SourceChunk } from "@/lib/api";
 import Icon from "@/components/Icon";
 import SourceCitations from "./SourceCitations";
@@ -31,7 +33,9 @@ export default function MessageBubble({ message }: { message: Message }) {
       </div>
       <div className="flex flex-col gap-sm w-full">
         <div className="bg-surface-container-lowest text-on-surface p-sm rounded-xl border border-surface-variant shadow-sm flex flex-col gap-sm">
-          <p className="font-body-md text-body-md whitespace-pre-wrap">{message.text}</p>
+          <div className="chat-markdown font-body-md text-body-md">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
+          </div>
           {message.sources && message.sources.length > 0 && (
             <SourceCitations sources={message.sources} />
           )}

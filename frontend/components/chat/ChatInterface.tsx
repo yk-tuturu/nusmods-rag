@@ -79,8 +79,8 @@ export default function ChatInterface() {
 
   return (
     <>
-      <main className="flex-1 flex flex-col h-full relative lg:ml-64 xl:mr-80 min-w-0">
-        <div className="flex-1 overflow-y-auto p-gutter md:p-md flex flex-col gap-lg max-w-[900px] mx-auto w-full pb-40">
+      <main className="flex-1 flex flex-col h-full min-h-0 lg:ml-64 xl:mr-80 min-w-0">
+        <div className="flex-1 min-h-0 overflow-y-auto chat-scrollbar p-gutter md:p-md flex flex-col gap-lg max-w-[900px] mx-auto w-full">
           <div className="flex flex-wrap items-center justify-between gap-xs -mt-1">
             <span className="font-label-sm text-label-sm font-mono text-on-surface-variant bg-surface-container rounded-full px-3 py-1">
               Today
@@ -138,7 +138,7 @@ export default function ChatInterface() {
           <div ref={bottomRef} />
         </div>
 
-        <div className="absolute bottom-0 left-0 w-full bg-surface/80 backdrop-blur-md border-t border-surface-variant p-gutter">
+        <div className="shrink-0 w-full bg-surface/80 backdrop-blur-md border-t border-surface-variant p-gutter">
           <form
             onSubmit={handleSubmit}
             className="max-w-[900px] mx-auto flex gap-sm items-end relative"
@@ -155,7 +155,7 @@ export default function ChatInterface() {
               placeholder="Ask about modules, degree requirements, or prerequisites..."
               rows={1}
               disabled={loading}
-              className="w-full bg-surface-container-lowest border border-outline-variant rounded-xl py-sm px-md font-body-md text-body-md text-on-surface focus:border-tertiary focus:ring-0 focus:outline-none resize-none h-14"
+              className="w-full bg-surface-container-lowest border border-outline-variant rounded-xl py-sm px-md font-body-md text-body-md text-on-surface focus:border-tertiary focus:ring-0 focus:outline-none resize-none h-14 hide-scrollbar"
             />
             <button
               type="submit"
