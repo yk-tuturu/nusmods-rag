@@ -1,7 +1,12 @@
 name: Scrape (test)
 
-# Manual only — runs the pipeline against a small fixed course list and
-# uploads the result as a downloadable artifact. Never touches the VM.
+# Manual only — runs the pipeline against a small fixed course list, uploads
+# the result as a downloadable artifact, AND stages it on the VM at
+# backend/data.test/ for inspection. Deliberately never swaps into
+# backend/data — that's the live path the running backend actually reads
+# from, and this test list is only 7 courses vs prod's 1000+, so swapping it
+# in would gut the real site's data. The live backend is never restarted
+# and never even knows this ran.
 on:
   workflow_dispatch: {}
 
@@ -38,3 +43,30 @@ jobs:
           name: test-scrape-data
           path: data/
           retention-days: 7
+
+      - name: Set up deploy key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts
+
+      # Same staging + atomic-swap pattern as prod, but the final resting
+      # place is backend/data.test — a path nothing in production ever
+      # reads from — not backend/data (the live one). No restart of the
+      # backend service happens here on purpose.
+      - name: Sync data to staging directory on VM
+        run: |
+          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" \
+            data/ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:~/nusmods-rag/backend/data.test.new/
+
+      - name: Atomically swap into backend/data.test (not the live data dir)
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} '
+            set -e
+            cd ~/nusmods-rag/backend
+            rm -rf data.test.old
+            mv data.test data.test.old 2>/dev/null || true
+            mv data.test.new data.test
+            rm -rf data.test.old
+          '
