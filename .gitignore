@@ -1,4 +1,6 @@
 backend/data/
+backend/data.new/
+backend/data.old/
 backend/.chroma/
 backend/chroma_db/
 *.env

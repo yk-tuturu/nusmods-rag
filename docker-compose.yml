@@ -12,8 +12,6 @@ x-backend-image: &backend-image
   image: ghcr.io/yk-tuturu/nusmod-backend:latest
   env_file:
     - ./backend/.env
-  volumes:
-    - ./backend/data:/app/data
   networks:
     - internal
 
@@ -22,16 +20,22 @@ services:
     <<: *backend-image
     environment:
       ALLOWED_ORIGINS: https://nusadvice.ykkoh.com
+    volumes:
+      - ./backend/data:/app/data
     restart: unless-stopped
 
   # Not part of `docker compose up` — the "tools" profile means this only
-  # starts when explicitly asked for, e.g.:
-  #   docker compose run --rm scraper
-  #   docker compose run --rm scraper --courses CS2030,CS2040
+  # starts when explicitly asked for. Writes to data.new, NOT data — it
+  # never touches the directory the live backend is reading from. Use
+  # refresh_data.sh to run this and safely swap the result into place;
+  # don't invoke this service directly unless you're happy doing that
+  # swap yourself.
   scraper:
     <<: *backend-image
     entrypoint: ["./refresh.sh"]
     profiles: ["tools"]
+    volumes:
+      - ./backend/data.new:/app/data
 
   frontend:
     image: ghcr.io/yk-tuturu/nusmod-frontend:latest

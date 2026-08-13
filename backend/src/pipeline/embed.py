@@ -1,13 +1,13 @@
 """
 embed.py
 
-Embeds chunks from data/chunks/chunks.jsonl (see chunk.py) using a local
-sentence-transformers model and upserts them into a persistent local Chroma
-collection. Upserts are keyed by chunk id, so re-running this after a
-re-chunk is idempotent (no duplicate vectors). Any id present in the
-collection but no longer in chunks.jsonl (e.g. a course produced fewer
-chunks on re-chunk, so its old high-index ids no longer exist) is deleted
-first, so stale vectors never linger and get returned by retrieval.
+Embeds chunks from data/chunks/chunks.jsonl (see chunk.py) using OpenAI's
+embeddings API and upserts them into a persistent local Chroma collection.
+Upserts are keyed by chunk id, so re-running this after a re-chunk is
+idempotent (no duplicate vectors). Any id present in the collection but no
+longer in chunks.jsonl (e.g. a course produced fewer chunks on re-chunk, so
+its old high-index ids no longer exist) is deleted first, so stale vectors
+never linger and get returned by retrieval.
 
 USAGE
 -----
@@ -20,13 +20,19 @@ import json
 from pathlib import Path
 
 import chromadb
-from sentence_transformers import SentenceTransformer
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+try:
+    from src.embeddings import embed_texts
+except ImportError:  # running as a plain script rather than a package module
+    import sys
+    sys.path.insert(0, str(BACKEND_DIR))
+    from src.embeddings import embed_texts
+
 CHUNKS_PATH = BACKEND_DIR / "data" / "chunks" / "chunks.jsonl"
 CHROMA_DIR = BACKEND_DIR / "data" / "chroma_db"
 COLLECTION_NAME = "nusmods_reviews"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 BATCH_SIZE = 64
 
 
@@ -69,7 +75,6 @@ def embed_and_upsert(chunks: list[dict] | None = None):
         print("No chunks to embed.")
         return
 
-    model = SentenceTransformer(EMBEDDING_MODEL)
     collection = get_collection()
 
     current_ids = {c["id"] for c in chunks}
@@ -85,7 +90,7 @@ def embed_and_upsert(chunks: list[dict] | None = None):
         ids = [c["id"] for c in batch]
         metadatas = [chunk_metadata(c) for c in batch]
 
-        embeddings = model.encode(texts, show_progress_bar=False).tolist()
+        embeddings = embed_texts(texts)
 
         collection.upsert(
             ids=ids,

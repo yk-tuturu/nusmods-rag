@@ -11,8 +11,8 @@ Retrieves relevant chunks from the Chroma collection for a user query.
   from Chroma, then rerank the candidates by a composite score before
   truncating to k, rather than trusting Chroma's raw distance order as-is.
 
-Uses the same local sentence-transformers model as embed.py to embed the
-query, since embeddings must come from the same model as the stored vectors.
+Uses the same OpenAI embedding model as embed.py to embed the query, since
+embeddings must come from the same model as the stored vectors.
 """
 
 from __future__ import annotations
@@ -22,12 +22,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import chromadb
-from sentence_transformers import SentenceTransformer
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+try:
+    from src.embeddings import embed_texts
+except ImportError:  # running as a plain script rather than a package module
+    import sys
+    sys.path.insert(0, str(BACKEND_DIR))
+    from src.embeddings import embed_texts
+
 CHROMA_DIR = BACKEND_DIR / "data" / "chroma_db"
 COLLECTION_NAME = "nusmods_reviews"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_K = 8
 
 # How many extra candidates to pull from Chroma before reranking, so the
@@ -35,11 +41,13 @@ DEFAULT_K = 8
 # instead of only ever seeing Chroma's already-truncated top k.
 OVERFETCH_MULTIPLIER = 3
 
-# Recency/reply-chain reranking weights, calibrated against this
-# collection's typical adjacent-candidate distance gaps of ~0.05-0.15
-# (all-MiniLM-L6-v2 + Chroma's default l2 space): big enough to break
-# near-ties toward newer/standalone comments, small enough that a clearly
-# more relevant older or reply-thread chunk still wins.
+# Recency/reply-chain reranking weights. NOTE: these were calibrated
+# against all-MiniLM-L6-v2's typical adjacent-candidate distance gaps of
+# ~0.05-0.15 in Chroma's default l2 space. Now that embeddings come from
+# OpenAI's text-embedding-3-small (see src/embeddings.py) instead, the
+# actual distance-gap scale for this collection hasn't been re-measured -
+# these weights may be mis-calibrated (too weak to matter, or strong enough
+# to dominate semantic similarity) until checked against real query results.
 RECENCY_HALF_LIFE_DAYS = 365 * 2  # a review's recency bonus halves every 2 years
 RECENCY_WEIGHT = 0.15
 REPLY_THREAD_PENALTY = 0.05
@@ -47,15 +55,7 @@ REPLY_THREAD_PENALTY = 0.05
 # NUS course code pattern, e.g. CS2030, GEA1000, CS1101S, ST2131
 COURSE_CODE_PATTERN = re.compile(r"\b[A-Z]{2,3}\d{4}[A-Z]?\b")
 
-_model: SentenceTransformer | None = None
 _collection = None
-
-
-def _get_model() -> SentenceTransformer:
-    global _model
-    if _model is None:
-        _model = SentenceTransformer(EMBEDDING_MODEL)
-    return _model
 
 
 def _get_collection():
@@ -107,12 +107,11 @@ def retrieve(query: str, k: int = DEFAULT_K, course_code: str | None = None) -> 
     chunks get a nudge ahead of near-tied older/reply-thread ones.
     """
     collection = _get_collection()
-    model = _get_model()
 
     course_code = course_code or detect_course_code(query)
     where = {"course_code": course_code} if course_code else None
 
-    query_embedding = model.encode([query]).tolist()
+    query_embedding = embed_texts([query])
     fetch_n = k * OVERFETCH_MULTIPLIER
 
     result = collection.query(
