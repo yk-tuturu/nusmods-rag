@@ -43,7 +43,9 @@ docker compose run --rm scraper "$@"
 
 echo "== atomically swapping staged data into place =="
 rm -rf backend/data.old
-mv backend/data backend/data.old
+if [ -d backend/data ]; then
+    mv backend/data backend/data.old
+fi
 mv backend/data.new backend/data
 
 echo "== restarting backend to pick up new data =="
