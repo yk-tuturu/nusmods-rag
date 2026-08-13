@@ -31,8 +31,14 @@ if [ "${1:-}" = "--test" ]; then
     set -- --courses "$TEST_COURSES"
 fi
 
+# Run the scraper container as this user, not root — otherwise it writes
+# to the bind mount as root and we can't clean up data.old without sudo.
+export HOST_UID="$(id -u)"
+export HOST_GID="$(id -g)"
+
 echo "== running scraper into staging directory (backend/data.new) =="
 rm -rf backend/data.new
+mkdir -p backend/data.new
 docker compose run --rm scraper "$@"
 
 echo "== atomically swapping staged data into place =="

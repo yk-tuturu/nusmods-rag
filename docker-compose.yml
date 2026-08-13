@@ -36,6 +36,10 @@ services:
     profiles: ["tools"]
     volumes:
       - ./backend/data.new:/app/data
+    # Backend image doesn't set a non-root USER, so without this the
+    # container writes to the bind mount as root, leaving files the host
+    # user can't clean up without sudo. UID/GID come from refresh_data.sh.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
 
   frontend:
     image: ghcr.io/yk-tuturu/nusmod-frontend:latest
