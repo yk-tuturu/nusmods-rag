@@ -17,11 +17,19 @@
 #   ./refresh_data.sh                       # default pilot course list
 #   ./refresh_data.sh --courses CS2030,CS2040
 #   ./refresh_data.sh --all
+#   ./refresh_data.sh --test                # fixed small test course list
 #
-# Any arguments are forwarded to refresh.sh's scrape step.
+# Any arguments are forwarded to refresh.sh's scrape step, except --test,
+# which is handled here and translated into a --courses list.
+
+TEST_COURSES="CS2030S,CS2040S,MA1521,MA1522,GEA1000N,CS2103T"
 
 set -euo pipefail
 cd "$(dirname "$0")"
+
+if [ "${1:-}" = "--test" ]; then
+    set -- --courses "$TEST_COURSES"
+fi
 
 echo "== running scraper into staging directory (backend/data.new) =="
 rm -rf backend/data.new
