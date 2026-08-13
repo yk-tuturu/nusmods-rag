@@ -31,9 +31,22 @@ cd "$(dirname "$0")"
 export HOST_UID="$(id -u)"
 export HOST_GID="$(id -g)"
 
-echo "== running scraper into staging directory (backend/data.new) =="
+echo "== staging: seeding backend/data.new from current backend/data =="
 rm -rf backend/data.new
-mkdir -p backend/data.new
+if [ -d backend/data ]; then
+    # Seed from the current live data, not a blank directory - otherwise
+    # the freshness cache never has anything to compare against (full
+    # re-scrape + full re-embed every run), failure "attempts" counts
+    # never accumulate across runs, and any course not touched by this
+    # run's scope would simply vanish after the swap instead of keeping
+    # its last-known-good data. -a preserves mtimes, which is_fresh()'s
+    # freshness check depends on.
+    cp -a backend/data backend/data.new
+else
+    mkdir -p backend/data.new
+fi
+
+echo "== running scraper into staging directory (backend/data.new) =="
 docker compose run --rm scraper "$@"
 
 echo "== atomically swapping staged data into place =="

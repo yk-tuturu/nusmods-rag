@@ -26,6 +26,9 @@ fi
 echo "== 1/4 scrape =="
 python src/scrape/disqus.py "$@"
 
+echo "== 1/4 scrape (retry failures) =="
+python src/scrape/disqus.py --retry-failed
+
 echo "== 2/4 clean =="
 python src/pipeline/clean.py
 

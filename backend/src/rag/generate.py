@@ -27,7 +27,14 @@ using course metadata and student review comments. Answer ONLY using the context
 provided below. If the context does not contain enough information to answer the \
 question, say so explicitly rather than guessing or using outside knowledge. \
 Keep answers concise. When useful, mention specifics (workload, professors, \
-difficulty) drawn directly from the reviews."""
+difficulty) drawn directly from the reviews. Some reviews may be short or terse, but they are still valid context. \
+If the context contains conflicting information, summarize the range of opinions \
+rather than picking one side. In the response, include direct quotes from the reviews when relevant, especially if the review is interesting or funny. \
+Each piece of context is labeled with its date where available - for questions where \
+currency matters (workload, professors, exam format, syllabus specifics), mention how \
+recent the reviews you're drawing on are, especially if they're old or all from one \
+period, so the reader can judge how current the information likely still is. \
+"""
 
 _client: OpenAI | None = None
 
@@ -47,7 +54,10 @@ def _get_client() -> OpenAI:
 def format_context(chunks: list[dict]) -> str:
     blocks = []
     for c in chunks:
-        label = f"[{c['course_code']} | {c['chunk_type']}]"
+        # date is "" for non-review (e.g. metadata/prereq) chunks, which have
+        # no meaningful date - omit rather than print an empty field.
+        date_part = f" | {c['date']}" if c.get("date") else ""
+        label = f"[{c['course_code']} | {c['chunk_type']}{date_part}]"
         blocks.append(f"{label}\n{c['text']}")
     return "\n\n---\n\n".join(blocks)
 

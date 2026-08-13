@@ -3,8 +3,14 @@ retriever.py
 
 Retrieves relevant chunks from the Chroma collection for a user query.
 
-- If the query mentions a specific NUS course code (e.g. "CS2030", "GEA1000",
-  "CS1101S"), retrieval is filtered to that course's chunks first.
+- If the query mentions NUS course code(s) (e.g. "CS2030", "GEA1000",
+  "CS1101S"), retrieval is filtered to those courses' chunks first.
+- If more than one course code is mentioned (e.g. "compare CS2030S vs
+  CS2040S"), each course gets its own independently retrieved and reranked
+  k-sized share of results, then they're merged - a single query filtered
+  to "either course" and globally reranked can't guarantee both are
+  actually represented, since one course's chunks can simply out-rank the
+  other's and crowd it out of the top k entirely.
 - Otherwise, semantic search runs across all chunks.
 - Ranking is still primarily semantic similarity, but nudged toward newer
   and non-reply-thread review chunks (see _rerank_score): we over-fetch
@@ -66,9 +72,15 @@ def _get_collection():
     return _collection
 
 
-def detect_course_code(query: str) -> str | None:
-    match = COURSE_CODE_PATTERN.search(query.upper())
-    return match.group(0) if match else None
+def detect_course_codes(query: str) -> list[str]:
+    """Every distinct course code mentioned in the query, in order of first
+    appearance. Empty list if none found."""
+    seen: list[str] = []
+    for match in COURSE_CODE_PATTERN.finditer(query.upper()):
+        code = match.group(0)
+        if code not in seen:
+            seen.append(code)
+    return seen
 
 
 def _recency_factor(date_str: str | None) -> float:
@@ -98,35 +110,14 @@ def _rerank_score(chunk: dict) -> float:
     return score
 
 
-def retrieve(query: str, k: int = DEFAULT_K, course_code: str | None = None) -> list[dict]:
-    """Return up to k chunks most relevant to the query, each with metadata.
-
-    Over-fetches k * OVERFETCH_MULTIPLIER candidates from Chroma, then
-    reranks them by _rerank_score before truncating to k - semantic
-    similarity is still the primary signal, but newer/standalone-comment
-    chunks get a nudge ahead of near-tied older/reply-thread ones.
-    """
-    collection = _get_collection()
-
-    course_code = course_code or detect_course_code(query)
-    where = {"course_code": course_code} if course_code else None
-
-    query_embedding = embed_texts([query])
-    fetch_n = k * OVERFETCH_MULTIPLIER
-
+def _query_chunks(collection, query_embedding, fetch_n: int, where: dict | None = None) -> list[dict]:
+    """Run one Chroma query and parse the result into our chunk dict shape."""
     result = collection.query(
         query_embeddings=query_embedding,
         n_results=fetch_n,
         where=where,
     )
-
-    # If a course-code filter returned nothing (e.g. course has no data yet),
-    # fall back to an unfiltered semantic search rather than returning empty.
     ids = result.get("ids", [[]])[0]
-    if not ids and where:
-        result = collection.query(query_embeddings=query_embedding, n_results=fetch_n)
-        ids = result.get("ids", [[]])[0]
-
     documents = result.get("documents", [[]])[0]
     metadatas = result.get("metadatas", [[]])[0]
     distances = result.get("distances", [[]])[0]
@@ -143,6 +134,43 @@ def retrieve(query: str, k: int = DEFAULT_K, course_code: str | None = None) -> 
             "is_thread": bool(meta.get("is_thread")),
             "distance": dist,
         })
+    return chunks
+
+
+def retrieve(query: str, k: int = DEFAULT_K, course_code: str | None = None) -> list[dict]:
+    """Return relevant chunks for the query, each with metadata.
+
+    - Zero or one course code (explicit `course_code` param, or exactly one
+      detected in the query text): a single over-fetch-then-rerank pass,
+      truncated to k - same behavior as before.
+    - Multiple course codes detected (e.g. a "compare X vs Y" question):
+      each course gets its own independent over-fetch-then-rerank pass,
+      truncated to k EACH, then merged - so a comparison gets up to k
+      chunks per course (not k split across them), and no single course's
+      chunks can crowd another's out of the result entirely.
+    """
+    collection = _get_collection()
+    query_embedding = embed_texts([query])
+    fetch_n = k * OVERFETCH_MULTIPLIER
+
+    codes = [course_code] if course_code else detect_course_codes(query)
+
+    if len(codes) > 1:
+        merged = []
+        for code in codes:
+            course_chunks = _query_chunks(collection, query_embedding, fetch_n, {"course_code": code})
+            course_chunks.sort(key=_rerank_score)
+            merged.extend(course_chunks[:k])
+        return merged
+
+    code = codes[0] if codes else None
+    where = {"course_code": code} if code else None
+    chunks = _query_chunks(collection, query_embedding, fetch_n, where)
+
+    # If a course-code filter returned nothing (e.g. course has no data yet),
+    # fall back to an unfiltered semantic search rather than returning empty.
+    if not chunks and where:
+        chunks = _query_chunks(collection, query_embedding, fetch_n)
 
     chunks.sort(key=_rerank_score)
     return chunks[:k]

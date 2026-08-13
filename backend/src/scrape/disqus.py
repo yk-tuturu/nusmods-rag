@@ -41,6 +41,11 @@ NOTES
   research/analysis, not bulk republishing.
 - If a course page has no Disqus thread yet (no comments posted), the script
   will just report 0 comments found but still save the metadata.
+- Every run (including a --retry-failed run with nothing to do) writes
+  data/scrape_state/run_summary.json - mode, start/end time, duration,
+  courses attempted/succeeded/failed this run, total outstanding failures,
+  and how many times the rate limit was hit - so "how did the last run go"
+  is a file read, not a log scroll.
 """
 
 from __future__ import annotations
@@ -82,7 +87,19 @@ PILOT_COURSE_CODES = [
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 RAW_DIR = BACKEND_DIR / "data" / "raw"
 FAILURES_PATH = BACKEND_DIR / "data" / "scrape_state" / "disqus_failures.json"
+SUMMARY_PATH = BACKEND_DIR / "data" / "scrape_state" / "run_summary.json"
+# One JSON object per line, appended to (not overwritten) - the full history
+# behind run_summary.json's "latest only" snapshot. JSON Lines rather than a
+# single JSON array specifically so appending is just "write a line", no
+# read-modify-write of the whole file (and thus no risk of corrupting past
+# history if a run ever gets killed mid-write).
+HISTORY_PATH = BACKEND_DIR / "data" / "scrape_state" / "run_history.jsonl"
 API_BASE = "https://disqus.com/api/3.0"
+
+# Incremented by _disqus_get() whenever it has to wait out a quota reset -
+# surfaced in the run summary so a run that spent most of its time asleep
+# waiting on Disqus is visibly different from one that just ran normally.
+_rate_limit_waits = 0
 
 PAGINATION_DELAY_SECS = 0.5
 BETWEEN_COURSE_DELAY_SECS = 1.0
@@ -93,23 +110,46 @@ RATE_LIMIT_BUFFER = 5
 # Small safety margin added past Disqus's reported reset time, in case of
 # clock skew between us and their server.
 RATE_LIMIT_RESET_MARGIN_SECS = 5
+# A course that's failed this many times (persisted across runs via
+# disqus_failures.json's "attempts" field, not just this invocation) is
+# excluded from --retry-failed - it's presumably a real, non-transient
+# problem (bad course code, permanently missing thread, etc.), not
+# something a retry is going to fix, so retrying it forever isn't useful.
+MAX_RETRY_ATTEMPTS = 3
+# Disqus's own error code for "you're over the hourly quota", from the
+# response BODY: {"code": 13, "response": "You have exceeded your hourly
+# limit of requests"}. Confirmed by observation that once you're actually
+# over quota, Disqus stops sending X-Ratelimit-* headers on that response
+# entirely - the header-based detection below can't see it at all, so the
+# body's own error code is the primary signal, not a fallback.
+DISQUS_RATE_LIMIT_ERROR_CODE = 13
 
 
 def _disqus_get(url: str, params: dict) -> dict:
     """GET against the Disqus API, rate-limit aware. Disqus reports
-    X-Ratelimit-Remaining/-Reset on every response, including error ones -
-    once the hourly cap is hit it returns a plain 400 rather than a 429, so
-    the remaining-count header (not just the status code) is what actually
-    tells us whether a failure is quota exhaustion or a real error."""
+    X-Ratelimit-Remaining/-Reset on most responses - but NOT on the actual
+    quota-exceeded response itself, which comes back as a plain 400 with no
+    rate-limit headers at all. So quota exhaustion is detected primarily via
+    the response body's own error code, with the headers as a secondary
+    signal for the "getting close" case."""
     resp = requests.get(url, params=params, timeout=15)
     remaining = resp.headers.get("X-Ratelimit-Remaining")
     reset_at = resp.headers.get("X-Ratelimit-Reset")
 
     if resp.status_code >= 400:
-        quota_exhausted = resp.status_code == 429 or (
-            remaining is not None and int(remaining) <= RATE_LIMIT_BUFFER
+        try:
+            error_code = resp.json().get("code")
+        except (ValueError, AttributeError):
+            error_code = None
+
+        quota_exhausted = (
+            resp.status_code == 429
+            or error_code == DISQUS_RATE_LIMIT_ERROR_CODE
+            or (remaining is not None and int(remaining) <= RATE_LIMIT_BUFFER)
         )
         if quota_exhausted:
+            global _rate_limit_waits
+            _rate_limit_waits += 1
             wait_secs = (
                 max(0, int(reset_at) - time.time()) + RATE_LIMIT_RESET_MARGIN_SECS
                 if reset_at else 3600  # no reset header to go on - fall back to a full hour
@@ -223,6 +263,15 @@ def save_failures(failures: dict) -> None:
     FAILURES_PATH.write_text(json.dumps(failures, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def save_summary(summary: dict) -> None:
+    """Overwrites run_summary.json (latest run only) and appends the same
+    summary as one line to run_history.jsonl (every run, kept forever)."""
+    SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SUMMARY_PATH.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    with HISTORY_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(summary, ensure_ascii=False) + "\n")
+
+
 def record_failure(failures: dict, course_code: str, error: Exception) -> None:
     entry = failures.get(course_code, {"attempts": 0})
     entry["attempts"] = entry.get("attempts", 0) + 1
@@ -282,12 +331,50 @@ def main():
     if DISQUS_PUBLIC_KEY == "YOUR_PUBLIC_KEY_HERE":
         raise SystemExit("Set DISQUS_PUBLIC_KEY before running (see docstring for setup).")
 
+    if args.retry_failed:
+        mode = "retry-failed"
+    elif args.all:
+        mode = "all"
+    elif args.courses:
+        mode = f"courses:{args.courses}"
+    else:
+        mode = "pilot"
+
+    started_at = datetime.now(timezone.utc)
+    start_time = time.time()
+
+    def write_summary(course_codes: list[str], succeeded: int, failed_this_run: int, failures: dict) -> None:
+        save_summary({
+            "mode": mode,
+            "started_at": started_at.isoformat(),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "duration_secs": round(time.time() - start_time, 1),
+            "total": len(course_codes),
+            "succeeded": succeeded,
+            "failed_this_run": failed_this_run,
+            "outstanding_failures": len(failures),
+            "rate_limit_waits": _rate_limit_waits,
+        })
+
     failures = load_failures()
 
     if args.retry_failed:
-        course_codes = sorted(failures.keys())
+        exhausted = sorted(
+            c for c, entry in failures.items()
+            if entry.get("attempts", 0) >= MAX_RETRY_ATTEMPTS
+        )
+        if exhausted:
+            print(f"{len(exhausted)} course(s) have already failed {MAX_RETRY_ATTEMPTS}+ times, "
+                  f"skipping (edit {FAILURES_PATH} to reset if you want to retry anyway): "
+                  f"{', '.join(exhausted)}")
+
+        course_codes = sorted(
+            c for c, entry in failures.items()
+            if entry.get("attempts", 0) < MAX_RETRY_ATTEMPTS
+        )
         if not course_codes:
             print("No recorded failures to retry.")
+            write_summary([], 0, 0, failures)
             return
     elif args.all:
         course_codes = nusmods_api.fetch_all_module_codes()
@@ -298,6 +385,9 @@ def main():
 
     print(f"Scraping {len(course_codes)} course(s)...")
 
+    succeeded = 0
+    failed_this_run = 0
+
     for i, course_code in enumerate(course_codes):
         print(f"[{i + 1}/{len(course_codes)}] Processing {course_code}...")
         try:
@@ -306,7 +396,9 @@ def main():
             print(f"  ! failed: {e}")
             record_failure(failures, course_code, e)
             save_failures(failures)
+            failed_this_run += 1
         else:
+            succeeded += 1
             if course_code in failures:
                 del failures[course_code]
                 save_failures(failures)
@@ -316,6 +408,8 @@ def main():
 
     if failures:
         print(f"\n{len(failures)} course(s) failed - rerun with --retry-failed to retry just those.")
+
+    write_summary(course_codes, succeeded, failed_this_run, failures)
 
 
 if __name__ == "__main__":
