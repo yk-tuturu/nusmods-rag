@@ -14,22 +14,17 @@
 # request landing mid-update and reading a mix that doesn't correspond.
 #
 # USAGE
-#   ./refresh_data.sh                       # default pilot course list
+#   ./refresh_data.sh                       # defaults to --all
 #   ./refresh_data.sh --courses CS2030,CS2040
 #   ./refresh_data.sh --all
 #   ./refresh_data.sh --test                # fixed small test course list
 #
-# Any arguments are forwarded to refresh.sh's scrape step, except --test,
-# which is handled here and translated into a --courses list.
-
-TEST_COURSES="CS2030S,CS2040S,MA1521,MA1522,GEA1000N,CS2103T"
+# Any arguments (or lack thereof) are forwarded as-is to refresh.sh inside
+# the container, which is what actually owns these defaults/translations
+# (see backend/refresh.sh).
 
 set -euo pipefail
 cd "$(dirname "$0")"
-
-if [ "${1:-}" = "--test" ]; then
-    set -- --courses "$TEST_COURSES"
-fi
 
 # Run the scraper container as this user, not root — otherwise it writes
 # to the bind mount as root and we can't clean up data.old without sudo.
