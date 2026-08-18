@@ -78,12 +78,16 @@ jobs:
       # actually reflects it - re-pulling the image alone doesn't touch
       # Chroma. Runs directly against the live container via `exec` rather
       # than the offline-build-then-atomic-swap dance scrape-prod.yml uses
-      # for the full scrape pipeline: programme docs are a small, fast corpus
-      # (see method_writeup.md), so the brief window where a concurrent
-      # request's Chroma client and this one-off upsert overlap is an
-      # accepted, low-consequence tradeoff for the simpler pipeline - not
-      # worth the extra staging/rsync machinery that a much larger, slower
-      # corpus (or a higher-traffic deployment) would justify.
+      # for the full scrape pipeline, since programme docs are a small, fast
+      # corpus - but --programme-only is load-bearing for that assumption to
+      # actually hold: a bare `chunk.py` re-derives chunks.jsonl from EVERY
+      # file in data/processed/ (the full scraped course catalog, which can
+      # be large in production), which previously OOM-killed this step on
+      # the VM. --programme-only rebuilds only the programme chunks and
+      # leaves existing course chunks in chunks.jsonl untouched, and embed.py
+      # skips re-embedding any chunk whose text hasn't changed - so this step
+      # costs proportional to the programme docs that changed, not the whole
+      # catalog.
       - name: Re-embed programme docs
         if: needs.changes.outputs.programme == 'true' || github.event_name == 'workflow_dispatch'
         uses: appleboy/ssh-action@v1
@@ -93,5 +97,5 @@ jobs:
           key: ${{ secrets.VM_SSH_KEY }}
           script: |
             cd ~/nusmods-rag
-            docker compose exec -T backend python src/pipeline/chunk.py
+            docker compose exec -T backend python src/pipeline/chunk.py --programme-only
             docker compose exec -T backend python src/pipeline/embed.py

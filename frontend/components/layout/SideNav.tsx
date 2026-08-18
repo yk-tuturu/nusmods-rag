@@ -3,7 +3,6 @@ import Icon from "@/components/Icon";
 
 const TOOLS = [
   { label: "Module Search", icon: "search" },
-  { label: "Degree Progress", icon: "analytics" },
   { label: "Saved Modules", icon: "bookmark" },
   { label: "Settings", icon: "settings", href: "/settings" },
 ];

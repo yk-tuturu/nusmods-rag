@@ -314,30 +314,20 @@ def build_chunks_for_course(course: dict) -> list[dict]:
     return chunks
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--courses", help="comma-separated course codes to chunk (default: all processed files)")
-    args = parser.parse_args()
+def load_existing_chunks() -> list[dict]:
+    if not CHUNKS_PATH.exists():
+        return []
+    chunks = []
+    with CHUNKS_PATH.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                chunks.append(json.loads(line))
+    return chunks
 
-    if args.courses:
-        codes = [c.strip().upper() for c in args.courses.split(",") if c.strip()]
-        paths = [PROCESSED_DIR / f"{c}.json" for c in codes]
-    else:
-        paths = sorted(PROCESSED_DIR.glob("*.json"))
 
+def build_programme_chunk_list() -> list[dict]:
     all_chunks = []
-    for path in paths:
-        if not path.exists():
-            print(f"skip {path.name}: no processed file")
-            continue
-        course = json.loads(path.read_text(encoding="utf-8"))
-        course_chunks = build_chunks_for_course(course)
-        all_chunks.extend(course_chunks)
-        print(f"{course['code']}: {len(course_chunks)} chunks")
-
-    # Programme docs are a separate corpus from course data (not filtered by
-    # --courses) and always processed in full, since re-chunking is cheap
-    # and there's no per-major equivalent of --courses yet.
     programme_paths = sorted(
         p for p in PROGRAMME_DIR.glob("*.md") if not p.stem.startswith("_")
     )
@@ -345,6 +335,53 @@ def main():
         programme_chunks = build_programme_chunks(path)
         all_chunks.extend(programme_chunks)
         print(f"{path.stem} (programme): {len(programme_chunks)} chunks")
+    return all_chunks
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--courses", help="comma-separated course codes to chunk (default: all processed files)")
+    # Course data can grow to the full NUSMods catalog (thousands of chunks
+    # once every course has been scraped) while programme docs stay tiny -
+    # re-deriving the whole course side just to pick up a programme.md edit
+    # is wasteful at best and, on a small production VM, OOM-killing at
+    # worst (see the CI incident this flag was added to fix). This rebuilds
+    # only the programme chunks and merges them into whatever's already in
+    # chunks.jsonl, leaving existing course chunks untouched rather than
+    # re-reading every file in data/processed/.
+    parser.add_argument(
+        "--programme-only",
+        action="store_true",
+        help="rebuild only programme/*.md chunks, merged into the existing chunks.jsonl "
+        "(course chunks are left as-is, not re-derived from data/processed/)",
+    )
+    args = parser.parse_args()
+
+    if args.programme_only:
+        existing = load_existing_chunks()
+        course_chunks = [c for c in existing if c.get("chunk_type") != "programme"]
+        stale_programme_count = len(existing) - len(course_chunks)
+        print(f"keeping {len(course_chunks)} existing course chunks as-is "
+              f"(dropping {stale_programme_count} stale programme chunks)")
+        all_chunks = course_chunks + build_programme_chunk_list()
+    else:
+        if args.courses:
+            codes = [c.strip().upper() for c in args.courses.split(",") if c.strip()]
+            paths = [PROCESSED_DIR / f"{c}.json" for c in codes]
+        else:
+            paths = sorted(PROCESSED_DIR.glob("*.json"))
+
+        all_chunks = []
+        for path in paths:
+            if not path.exists():
+                print(f"skip {path.name}: no processed file")
+                continue
+            course = json.loads(path.read_text(encoding="utf-8"))
+            course_chunks = build_chunks_for_course(course)
+            all_chunks.extend(course_chunks)
+            print(f"{course['code']}: {len(course_chunks)} chunks")
+
+        all_chunks.extend(build_programme_chunk_list())
 
     CHUNKS_DIR.mkdir(parents=True, exist_ok=True)
     with CHUNKS_PATH.open("w", encoding="utf-8") as f:

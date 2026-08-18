@@ -7,7 +7,11 @@ Upserts are keyed by chunk id, so re-running this after a re-chunk is
 idempotent (no duplicate vectors). Any id present in the collection but no
 longer in chunks.jsonl (e.g. a course produced fewer chunks on re-chunk, so
 its old high-index ids no longer exist) is deleted first, so stale vectors
-never linger and get returned by retrieval.
+never linger and get returned by retrieval. Any id whose text is unchanged
+from what's already stored is skipped entirely - no embedding API call, no
+upsert - so a chunks.jsonl that's mostly identical to last run (e.g. a
+programme-only rebuild that still carries every existing course chunk
+verbatim) doesn't re-embed the whole collection every time.
 
 USAGE
 -----
@@ -83,14 +87,29 @@ def embed_and_upsert(chunks: list[dict] | None = None):
     collection = get_collection()
 
     current_ids = {c["id"] for c in chunks}
-    existing_ids = set(collection.get(ids=None)["ids"])
+    existing = collection.get(ids=None, include=["documents"])
+    existing_ids = set(existing["ids"])
+    existing_text_by_id = dict(zip(existing["ids"], existing["documents"]))
+
     stale_ids = existing_ids - current_ids
     if stale_ids:
         collection.delete(ids=list(stale_ids))
         print(f"deleted {len(stale_ids)} stale vector(s) no longer in chunks.jsonl")
 
-    for i in range(0, len(chunks), BATCH_SIZE):
-        batch = chunks[i:i + BATCH_SIZE]
+    # Skip the (paid, rate-limited) OpenAI call for any chunk whose text is
+    # byte-identical to what's already stored - only new or actually-changed
+    # chunks need a fresh embedding. Without this, re-running embed over a
+    # chunks.jsonl that still contains every existing chunk verbatim - e.g.
+    # chunk.py's --programme-only, which rebuilds only programme chunks but
+    # leaves the (possibly catalog-sized) course chunks in place unchanged -
+    # would re-embed the entire collection every time regardless.
+    to_embed = [c for c in chunks if existing_text_by_id.get(c["id"]) != c["text"]]
+    skipped = len(chunks) - len(to_embed)
+    if skipped:
+        print(f"skipping {skipped} chunk(s) with unchanged text (already embedded)")
+
+    for i in range(0, len(to_embed), BATCH_SIZE):
+        batch = to_embed[i:i + BATCH_SIZE]
         texts = [c["text"] for c in batch]
         ids = [c["id"] for c in batch]
         metadatas = [chunk_metadata(c) for c in batch]
@@ -103,7 +122,7 @@ def embed_and_upsert(chunks: list[dict] | None = None):
             documents=texts,
             metadatas=metadatas,
         )
-        print(f"upserted {min(i + BATCH_SIZE, len(chunks))}/{len(chunks)} chunks")
+        print(f"upserted {min(i + BATCH_SIZE, len(to_embed))}/{len(to_embed)} chunks")
 
     print(f"Done. Collection '{COLLECTION_NAME}' now has {collection.count()} vectors.")
 
