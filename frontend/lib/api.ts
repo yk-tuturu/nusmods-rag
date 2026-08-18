@@ -28,6 +28,25 @@ export interface ProgrammeSummary {
   title: string;
 }
 
+export interface CourseAISummary {
+  code: string;
+  title: string | null;
+  summary: string;
+  difficulty: number;
+  review_count: number;
+  reviews_used: number;
+  generated_at: string;
+  model: string;
+}
+
+export interface NUSModsCourseDetail {
+  code: string;
+  title: string | null;
+  mcs: string | null;
+  description: string | null;
+  workload_hours: [string, number][] | null;
+}
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export async function sendChat(
@@ -67,6 +86,24 @@ export async function getProgrammes(): Promise<ProgrammeSummary[]> {
   const res = await fetch(`${API_BASE}/programmes`);
   if (!res.ok) {
     throw new Error(`Failed to load programmes (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function getCourseSummary(code: string): Promise<CourseAISummary | null> {
+  const res = await fetch(`${API_BASE}/courses/${code}/summary`);
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`Failed to load summary for ${code} (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function getModuleDetail(code: string): Promise<NUSModsCourseDetail | null> {
+  const res = await fetch(`${API_BASE}/nusmods/courses/${code}`);
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`Failed to load module detail for ${code} (${res.status})`);
   }
   return res.json();
 }

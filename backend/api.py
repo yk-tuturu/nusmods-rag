@@ -100,6 +100,17 @@ class NUSModsCourse(BaseModel):
     semesters: list[int] = []
 
 
+class NUSModsCourseDetail(BaseModel):
+    code: str
+    title: str | None = None
+    mcs: str | None = None
+    description: str | None = None
+    # [[label, hrs/wk], ...] e.g. [["Lecture", 2], ["Lab", 2]] - only the
+    # nonzero components, in NUSMods' documented order. None if the module
+    # has no workload data or an irregular (freeform string) workload.
+    workload_hours: list[list] | None = None
+
+
 class ProgrammeSummary(BaseModel):
     code: str
     title: str
@@ -161,6 +172,24 @@ def list_programmes():
         if not p.stem.startswith("_") and p.stem != "GE"
     )
     return [ProgrammeSummary(code=c, title=PROGRAMME_DISPLAY_NAMES.get(c, c)) for c in codes]
+
+
+@app.get("/nusmods/courses/{code}", response_model=NUSModsCourseDetail)
+def get_nusmods_course(code: str, academic_year: str | None = None):
+    """Per-module detail (MCs, description, contact-hour workload breakdown)
+    from the NUSMods catalog, for the planner's metrics view. Backed by
+    nusmods_api's on-disk cache like /nusmods/courses, so this doesn't hit
+    the NUSMods API on every request."""
+    detail = nusmods_api.fetch_module_detail(code.upper(), academic_year)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="module not found for this academic year")
+    return NUSModsCourseDetail(
+        code=detail.get("moduleCode", code.upper()),
+        title=detail.get("title"),
+        mcs=detail.get("moduleCredit"),
+        description=detail.get("description"),
+        workload_hours=nusmods_api.parse_workload_hours(detail.get("workload")),
+    )
 
 
 @app.get("/nusmods/courses", response_model=list[NUSModsCourse])

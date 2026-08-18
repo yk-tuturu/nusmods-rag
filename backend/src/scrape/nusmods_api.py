@@ -153,6 +153,27 @@ def format_prereq_tree(tree: dict | str | None) -> str | None:
     return _format_node(tree, top=True) or None
 
 
+# NUSMods' documented positional convention for the 5-number "workload"
+# array: hours/week spent in each category, in this fixed order. Only the
+# first four are scheduled class time - "Preparation" is self-study, not a
+# contact hour, so it's excluded from parse_workload_hours below.
+WORKLOAD_LABELS = ["Lecture", "Tutorial", "Lab", "Project", "Preparation"]
+
+
+def parse_workload_hours(workload) -> list[list] | None:
+    """Break a module's workload into labeled contact hrs/week (Lecture,
+    Tutorial, Lab, Project). Returns None for modules with no workload data,
+    or with an irregular (freeform string, rather than the standard
+    5-number array) workload."""
+    if not isinstance(workload, list) or len(workload) != 5:
+        return None
+    return [
+        [label, hours]
+        for label, hours in zip(WORKLOAD_LABELS, workload)
+        if hours and label != "Preparation"
+    ]
+
+
 def extract_summary(detail: dict) -> dict:
     """Pull out the fields the RAG pipeline cares about from a full module detail blob."""
     return {

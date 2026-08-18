@@ -3,7 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import AppShell from "@/components/layout/AppShell";
 import Icon from "@/components/Icon";
-import { getCourses, type CourseSummary } from "@/lib/api";
+import {
+  getCourses,
+  getCourseSummary,
+  getModuleDetail,
+  type CourseAISummary,
+  type CourseSummary,
+  type NUSModsCourseDetail,
+} from "@/lib/api";
 
 const STORAGE_KEY = "nusmods-planner-modules";
 
@@ -13,6 +20,12 @@ export default function PlannerPage() {
   const [hydrated, setHydrated] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [query, setQuery] = useState("");
+  const [detailsByCode, setDetailsByCode] = useState<
+    Record<string, NUSModsCourseDetail | null>
+  >({});
+  const [summariesByCode, setSummariesByCode] = useState<
+    Record<string, CourseAISummary | null>
+  >({});
 
   useEffect(() => {
     getCourses()
@@ -32,6 +45,21 @@ export default function PlannerPage() {
     if (!hydrated) return;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(savedCodes));
   }, [savedCodes, hydrated]);
+
+  // Metrics view: pull per-module workload/MCs from NUSMods and the
+  // AI-generated difficulty/summary for every saved module we haven't
+  // already fetched.
+  useEffect(() => {
+    const missing = savedCodes.filter((code) => !(code in detailsByCode));
+    for (const code of missing) {
+      getModuleDetail(code)
+        .then((detail) => setDetailsByCode((prev) => ({ ...prev, [code]: detail })))
+        .catch(() => setDetailsByCode((prev) => ({ ...prev, [code]: null })));
+      getCourseSummary(code)
+        .then((summary) => setSummariesByCode((prev) => ({ ...prev, [code]: summary })))
+        .catch(() => setSummariesByCode((prev) => ({ ...prev, [code]: null })));
+    }
+  }, [savedCodes, detailsByCode]);
 
   const courseByCode = useMemo(() => {
     const map = new Map<string, CourseSummary>();
@@ -114,26 +142,69 @@ export default function PlannerPage() {
             </p>
           </div>
         ) : (
-          savedModules.map((mod) => (
-            <div
-              key={mod.code}
-              className="bg-surface-container-lowest border border-surface-variant rounded-lg p-sm relative hover:shadow-[0_4px_12px_rgba(0,0,0,0.05)] transition-shadow"
-            >
-              <button
-                onClick={() => removeModule(mod.code)}
-                aria-label={`Remove ${mod.code}`}
-                className="absolute top-sm right-sm text-on-surface-variant hover:text-error transition-colors"
+          savedModules.map((mod) => {
+            const detail = detailsByCode[mod.code];
+            const summary = summariesByCode[mod.code];
+            const workloadHours = detail?.workload_hours;
+            const hasMetrics = (workloadHours && workloadHours.length > 0) || summary;
+
+            return (
+              <div
+                key={mod.code}
+                className="bg-surface-container-lowest border border-surface-variant rounded-lg p-sm relative hover:shadow-[0_4px_12px_rgba(0,0,0,0.05)] transition-shadow"
               >
-                <Icon name="close" size={16} />
-              </button>
-              <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface mb-xs pr-6">
-                {mod.code}
-              </h3>
-              <p className="font-body-sm text-body-sm text-on-surface-variant">
-                {mod.title ?? "No description available yet."}
-              </p>
-            </div>
-          ))
+                <button
+                  onClick={() => removeModule(mod.code)}
+                  aria-label={`Remove ${mod.code}`}
+                  className="absolute top-sm right-sm text-on-surface-variant hover:text-error transition-colors"
+                >
+                  <Icon name="close" size={16} />
+                </button>
+                <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface mb-xs pr-6">
+                  {mod.code}
+                </h3>
+                <p className="font-body-sm text-body-sm text-on-surface-variant mb-sm">
+                  {mod.title ?? detail?.title ?? detail?.description ?? "No description available yet."}
+                </p>
+
+                {hasMetrics && (
+                  <div className="flex flex-col gap-2 mb-sm">
+                    <div className="flex flex-wrap gap-xs">
+                      {workloadHours && workloadHours.length > 0 && (
+                        <div className="bg-surface-container-low px-2 py-1 rounded border border-surface-variant flex items-center gap-1">
+                          <Icon name="schedule" size={14} className="text-tertiary" />
+                          <span className="font-label-sm text-label-sm text-tertiary">
+                            {workloadHours
+                              .map(([label, hrs]) => `${label}: ${hrs} hr${hrs === 1 ? "" : "s"}/wk`)
+                              .join(" · ")}
+                          </span>
+                        </div>
+                      )}
+                      {summary && (
+                        <div className="bg-surface-container-low px-2 py-1 rounded border border-surface-variant flex items-center gap-1">
+                          <Icon name="psychology" size={14} className="text-primary" />
+                          <span className="font-label-sm text-label-sm text-primary">
+                            AI Difficulty: {summary.difficulty.toFixed(1)}/5
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    {summary && (
+                      <p className="text-[13px] text-on-surface-variant">
+                        <strong className="text-on-surface">AI Summary:</strong> {summary.summary}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {detail?.mcs && (
+                  <div className="text-[12px] text-on-surface-variant pt-xs border-t border-surface-variant">
+                    <span>{detail.mcs} MCs</span>
+                  </div>
+                )}
+              </div>
+            );
+          })
         )}
       </div>
     </AppShell>

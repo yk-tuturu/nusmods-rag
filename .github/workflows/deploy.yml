@@ -9,22 +9,6 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # Whether this push touched the hand-curated degree-requirement docs -
-  # gates the re-embed step below so an unrelated code change (e.g. a UI
-  # tweak) doesn't also pay for a Chroma re-embed on every deploy.
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      programme: ${{ steps.filter.outputs.programme }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            programme:
-              - 'backend/programme/**'
-
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
@@ -56,7 +40,7 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/nusmod-frontend:latest
 
   deploy:
-    needs: [build-and-push, changes]
+    needs: build-and-push
     runs-on: ubuntu-latest
     steps:
       - name: SSH in and redeploy
@@ -76,20 +60,22 @@ jobs:
       # whatever's newest in programme/ once it restarts. This just needs to
       # re-run chunk+embed so Chroma (which IS bind-mounted, at backend/data)
       # actually reflects it - re-pulling the image alone doesn't touch
-      # Chroma. Runs directly against the live container via `exec` rather
-      # than the offline-build-then-atomic-swap dance scrape-prod.yml uses
-      # for the full scrape pipeline, since programme docs are a small, fast
-      # corpus - but --programme-only is load-bearing for that assumption to
-      # actually hold: a bare `chunk.py` re-derives chunks.jsonl from EVERY
-      # file in data/processed/ (the full scraped course catalog, which can
-      # be large in production), which previously OOM-killed this step on
-      # the VM. --programme-only rebuilds only the programme chunks and
-      # leaves existing course chunks in chunks.jsonl untouched, and embed.py
-      # skips re-embedding any chunk whose text hasn't changed - so this step
-      # costs proportional to the programme docs that changed, not the whole
-      # catalog.
+      # Chroma.
+      #
+      # Runs unconditionally on every deploy, not gated on whether this push's
+      # diff touched backend/programme/** - a diff-based gate was tried and
+      # dropped: it compares against the *previous push*, not the *last
+      # successfully deployed* commit, so a push that fixes an unrelated
+      # failed deploy (without itself touching programme/) would skip this
+      # step and leave Chroma stuck on stale programme content indefinitely.
+      # Running it every time is self-correcting regardless of what broke a
+      # prior deploy. This is only cheap enough to do unconditionally because
+      # of two things below: --programme-only avoids re-deriving chunks.jsonl
+      # from the full (potentially catalog-sized) data/processed/ - a bare
+      # `chunk.py` doing that previously OOM-killed this step on the VM - and
+      # embed.py skips the OpenAI call entirely for any chunk whose text is
+      # unchanged, so a no-op run costs nothing beyond a quick file diff.
       - name: Re-embed programme docs
-        if: needs.changes.outputs.programme == 'true' || github.event_name == 'workflow_dispatch'
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VM_HOST }}
