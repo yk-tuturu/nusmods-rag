@@ -65,6 +65,11 @@ def chunk_metadata(chunk: dict) -> dict:
         # prereq check walk the actual and/or tree exactly, instead of
         # trusting an LLM to parse boolean logic out of embedded prose.
         "prereq_tree": json.dumps(prereq_tree) if prereq_tree else "",
+        # Only set on "programme" chunks (see chunk.py's build_programme_chunks) -
+        # retriever.py filters on programme_code the same way it filters
+        # review/info chunks on course_code.
+        "programme_code": chunk.get("programme_code") or "",
+        "section_title": chunk.get("section_title") or "",
     }
 
 

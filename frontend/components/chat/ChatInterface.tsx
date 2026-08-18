@@ -1,11 +1,24 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { sendChat, getCourses, type CourseSummary, type SourceChunk } from "@/lib/api";
+import {
+  sendChat,
+  getCourses,
+  getProgrammes,
+  type ChatMessage,
+  type CourseSummary,
+  type ProgrammeSummary,
+  type SourceChunk,
+} from "@/lib/api";
 import Icon from "@/components/Icon";
 import MessageBubble, { type Message } from "./MessageBubble";
 
 const SUGGESTIONS = ["Compare CS2030S vs CS2040S", "Gen Ed requirements", "Is CS2103T heavy?"];
+
+// How many prior messages to send back as conversation history. Kept in
+// sync with backend/src/rag/generate.py's MAX_HISTORY_MESSAGES - trimming
+// here too avoids shipping an ever-growing payload every turn.
+const MAX_HISTORY_MESSAGES = 8;
 
 let nextId = 0;
 function makeId() {
@@ -24,12 +37,18 @@ export default function ChatInterface() {
   const [error, setError] = useState<string | null>(null);
   const [courses, setCourses] = useState<CourseSummary[]>([]);
   const [selectedCourse, setSelectedCourse] = useState<string>("");
+  const [programmes, setProgrammes] = useState<ProgrammeSummary[]>([]);
+  const [selectedMajor, setSelectedMajor] = useState<string>("");
+  const [selectedSource, setSelectedSource] = useState<SourceChunk | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     getCourses()
       .then(setCourses)
       .catch(() => setCourses([]));
+    getProgrammes()
+      .then(setProgrammes)
+      .catch(() => setProgrammes([]));
   }, []);
 
   useEffect(() => {
@@ -45,6 +64,10 @@ export default function ChatInterface() {
   async function submitQuestion(question: string) {
     if (!question || loading) return;
 
+    const history: ChatMessage[] = messages
+      .slice(-MAX_HISTORY_MESSAGES)
+      .map((m) => ({ role: m.role, content: m.text }));
+
     setInput("");
     setError(null);
     setMessages((prev) => [
@@ -54,7 +77,7 @@ export default function ChatInterface() {
     setLoading(true);
 
     try {
-      const result = await sendChat(question, selectedCourse || undefined);
+      const result = await sendChat(question, selectedCourse || undefined, history, selectedMajor || undefined);
       setMessages((prev) => [
         ...prev,
         {
@@ -85,21 +108,38 @@ export default function ChatInterface() {
             <span className="font-label-sm text-label-sm font-mono text-on-surface-variant bg-surface-container rounded-full px-3 py-1">
               Today
             </span>
-            <label className="flex items-center gap-xs font-label-sm text-label-sm font-mono text-on-surface-variant">
-              Scope:
-              <select
-                value={selectedCourse}
-                onChange={(e) => setSelectedCourse(e.target.value)}
-                className="rounded-full border border-surface-variant bg-surface-container-lowest px-2 py-1 text-on-surface font-body-sm text-body-sm"
-              >
-                <option value="">All courses</option>
-                {courses.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.code}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="flex flex-wrap items-center gap-sm">
+              <label className="flex items-center gap-xs font-label-sm text-label-sm font-mono text-on-surface-variant">
+                Major:
+                <select
+                  value={selectedMajor}
+                  onChange={(e) => setSelectedMajor(e.target.value)}
+                  className="rounded-full border border-surface-variant bg-surface-container-lowest px-2 py-1 text-on-surface font-body-sm text-body-sm"
+                >
+                  <option value="">No major selected</option>
+                  {programmes.map((p) => (
+                    <option key={p.code} value={p.code}>
+                      {p.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-center gap-xs font-label-sm text-label-sm font-mono text-on-surface-variant">
+                Scope:
+                <select
+                  value={selectedCourse}
+                  onChange={(e) => setSelectedCourse(e.target.value)}
+                  className="rounded-full border border-surface-variant bg-surface-container-lowest px-2 py-1 text-on-surface font-body-sm text-body-sm"
+                >
+                  <option value="">All courses</option>
+                  {courses.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.code}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </div>
 
           {messages.length === 0 && (
@@ -215,14 +255,17 @@ export default function ChatInterface() {
                 <h4 className="font-headline-sm text-headline-sm text-on-surface mb-sm">
                   Cited Reviews
                 </h4>
-                <ul className="space-y-2">
-                  {contextSources.slice(0, 4).map((s, i) => (
+                <ul className="space-y-2 max-h-96 overflow-y-auto chat-scrollbar pr-1">
+                  {contextSources.map((s, i) => (
                     <li
                       key={i}
-                      className="p-2 rounded border border-surface-variant hover:bg-surface-variant transition-colors"
+                      onClick={() => setSelectedSource(s)}
+                      className="p-2 rounded border border-surface-variant hover:bg-surface-variant transition-colors cursor-pointer"
                     >
                       <div className="flex justify-between font-label-sm text-label-sm font-mono text-on-surface-variant">
-                        <span className="text-primary font-bold">{s.course_code ?? "—"}</span>
+                        <span className="text-primary font-bold">
+                          {s.course_code ?? (s.programme_code ? `${s.programme_code} · ${s.section_title}` : "—")}
+                        </span>
                         {s.date && <span>{s.date}</span>}
                       </div>
                       <p className="font-body-sm text-body-sm text-on-surface mt-1 line-clamp-3">
@@ -236,6 +279,46 @@ export default function ChatInterface() {
           )}
         </div>
       </aside>
+
+      {selectedSource && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-gutter"
+          onClick={() => setSelectedSource(null)}
+        >
+          <div
+            className="bg-surface-container-lowest rounded-xl border border-outline-variant shadow-lg max-w-[32rem] w-full max-h-[80vh] overflow-y-auto chat-scrollbar p-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-sm mb-sm">
+              <div className="flex flex-wrap gap-x-2 items-center font-label-sm text-label-sm font-mono text-on-surface-variant">
+                {selectedSource.course_code && (
+                  <span className="font-bold text-primary">{selectedSource.course_code}</span>
+                )}
+                {!selectedSource.course_code && selectedSource.programme_code && (
+                  <span className="font-bold text-primary">
+                    {selectedSource.programme_code} · {selectedSource.section_title}
+                  </span>
+                )}
+                {selectedSource.chunk_type && <span>[{selectedSource.chunk_type}]</span>}
+                {selectedSource.date && <span>{selectedSource.date}</span>}
+                {typeof selectedSource.likes === "number" && selectedSource.likes > 0 && (
+                  <span>{selectedSource.likes} likes</span>
+                )}
+              </div>
+              <button
+                onClick={() => setSelectedSource(null)}
+                aria-label="Close"
+                className="text-on-surface-variant hover:text-on-surface flex-shrink-0"
+              >
+                <Icon name="close" size={18} />
+              </button>
+            </div>
+            <p className="font-body-md text-body-md text-on-surface whitespace-pre-wrap">
+              {selectedSource.text}
+            </p>
+          </div>
+        </div>
+      )}
     </>
   );
 }

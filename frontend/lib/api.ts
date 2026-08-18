@@ -4,6 +4,13 @@ export interface SourceChunk {
   date: string | null;
   likes: number | null;
   text: string;
+  programme_code: string | null;
+  section_title: string | null;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
 }
 
 export interface ChatResponse {
@@ -16,11 +23,18 @@ export interface CourseSummary {
   title: string | null;
 }
 
+export interface ProgrammeSummary {
+  code: string;
+  title: string;
+}
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export async function sendChat(
   question: string,
-  courseCode?: string | null
+  courseCode?: string | null,
+  history?: ChatMessage[],
+  programmeCode?: string | null
 ): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: "POST",
@@ -28,6 +42,8 @@ export async function sendChat(
     body: JSON.stringify({
       question,
       course_code: courseCode || null,
+      programme_code: programmeCode || null,
+      history: history ?? [],
     }),
   });
 
@@ -43,6 +59,14 @@ export async function getCourses(): Promise<CourseSummary[]> {
   const res = await fetch(`${API_BASE}/courses`);
   if (!res.ok) {
     throw new Error(`Failed to load courses (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function getProgrammes(): Promise<ProgrammeSummary[]> {
+  const res = await fetch(`${API_BASE}/programmes`);
+  if (!res.ok) {
+    throw new Error(`Failed to load programmes (${res.status})`);
   }
   return res.json();
 }

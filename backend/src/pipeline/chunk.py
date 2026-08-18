@@ -21,20 +21,26 @@ chunks with metadata:
     "is_thread" flag below is unambiguous - see retriever.py, which
     deprioritizes reply-thread chunks slightly since a back-and-forth is
     often lower-signal than a standalone review.
+  - one "programme" chunk per markdown section in programme/*.md (degree
+    requirement documents, e.g. CS.md, BBA.md, GE.md), split at every "#" or
+    "##" header - see split_markdown_sections(). programme/_common.md is
+    skipped here: it's small and universally relevant, so generate.py injects
+    it directly as static context instead of going through retrieval.
 
-Writes all chunks (across every processed course) to a single JSONL file at
-data/chunks/chunks.jsonl, one JSON object per line:
+Writes all chunks (across every processed course, plus every programme doc)
+to a single JSONL file at data/chunks/chunks.jsonl, one JSON object per line:
 
-    {"id": str, "course_code": str, "chunk_type": "info"|"review",
-     "text": str, "date": str, "likes": int, "is_thread": bool,
-     "prereq_tree": dict|None}
+    {"id": str, "course_code": str|None, "chunk_type": "info"|"review"|"programme",
+     "text": str, "date": str|None, "likes": int|None, "is_thread": bool,
+     "prereq_tree": dict|None, "programme_code": str|None, "section_title": str|None}
 
-"prereq_tree" is only ever set on "info" chunks (None on "review" chunks) -
-it's the raw structured tree carried alongside the rendered prose in "text"
-so embed.py can also store it as exact-checkable metadata. "is_thread" is
-only meaningful on "review" chunks (always False on "info" chunks); for a
-merged chunk it's the date of its most recent thread, not its oldest, so
-recency-based retrieval isn't working off a stale timestamp.
+"prereq_tree" is only ever set on "info" chunks (None on "review" and
+"programme" chunks) - it's the raw structured tree carried alongside the
+rendered prose in "text" so embed.py can also store it as exact-checkable
+metadata. "is_thread" is only meaningful on "review" chunks (always False
+otherwise); for a merged chunk it's the date of its most recent thread, not
+its oldest, so recency-based retrieval isn't working off a stale timestamp.
+"programme_code" and "section_title" are only set on "programme" chunks.
 
 USAGE
 -----
@@ -45,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -63,8 +70,13 @@ MAX_CHUNK_CHARS = 2000
 FULFILL_REQUIREMENTS_CAP = 8
 
 PROCESSED_DIR = BACKEND_DIR / "data" / "processed"
+PROGRAMME_DIR = BACKEND_DIR / "programme"
 CHUNKS_DIR = BACKEND_DIR / "data" / "chunks"
 CHUNKS_PATH = CHUNKS_DIR / "chunks.jsonl"
+
+# Matches a markdown "#" or "##" header line (but not "###+", which none of
+# the programme docs use at the top level we care about).
+HEADER_PATTERN = re.compile(r"^(#{1,2})\s+(.*?)\s*$", re.MULTILINE)
 
 
 def build_info_chunk(course: dict) -> dict | None:
@@ -222,6 +234,77 @@ def build_review_chunks(course: dict) -> list[dict]:
     return chunks
 
 
+def split_markdown_sections(text: str) -> list[dict]:
+    """Split a programme doc into sections at every "#" or "##" header line,
+    regardless of level - the docs mix header levels inconsistently (e.g.
+    BBA.md uses "##" for its intro and "#" for later sections), so a strict
+    hierarchy isn't reliable, but every header line is still a genuine
+    section boundary worth its own chunk.
+
+    Returns an ordered list of {"title": str, "parent": str | None, "body":
+    str}. Content before the first header becomes a single "Overview"
+    section. "parent" is the nearest preceding "#"-level header, used to
+    disambiguate two "##" sections that share a title but sit under
+    different parents - e.g. GE.md has two "## Data Literacy" sections: one
+    under the pillar-description intro, one under "List of Courses approved
+    under the GE pillars". Without the parent, a chunker keyed on title
+    alone would collide the two."""
+    matches = list(HEADER_PATTERN.finditer(text))
+    if not matches:
+        body = text.strip()
+        return [{"title": "Overview", "parent": None, "body": body}] if body else []
+
+    sections = []
+    preamble = text[:matches[0].start()].strip()
+    if preamble:
+        sections.append({"title": "Overview", "parent": None, "body": preamble})
+
+    current_parent = None
+    for i, m in enumerate(matches):
+        level = len(m.group(1))
+        title = m.group(2).strip()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[m.end():end].strip()
+
+        if level == 1:
+            current_parent = title
+            parent = None
+        else:
+            parent = current_parent
+
+        if body:
+            sections.append({"title": title, "parent": parent, "body": body})
+
+    return sections
+
+
+def build_programme_chunks(path: Path) -> list[dict]:
+    programme_code = path.stem
+    text = path.read_text(encoding="utf-8")
+    chunks = []
+    for idx, section in enumerate(split_markdown_sections(text)):
+        # Disambiguate same-titled subsections under different parents (see
+        # split_markdown_sections docstring) and give the embedded text a
+        # heading, since a section's body alone doesn't always mention what
+        # it's about (e.g. a bare course list doesn't say "Data Literacy").
+        if section["parent"] and section["parent"] != section["title"]:
+            section_title = f"{section['parent']} — {section['title']}"
+        else:
+            section_title = section["title"]
+
+        chunks.append({
+            "id": f"{programme_code}_prog_{idx}",
+            "course_code": None,
+            "chunk_type": "programme",
+            "programme_code": programme_code,
+            "section_title": section_title,
+            "text": f"{programme_code} programme — {section_title}\n\n{section['body']}",
+            "date": None,
+            "likes": None,
+        })
+    return chunks
+
+
 def build_chunks_for_course(course: dict) -> list[dict]:
     chunks = []
     info_chunk = build_info_chunk(course)
@@ -251,6 +334,17 @@ def main():
         course_chunks = build_chunks_for_course(course)
         all_chunks.extend(course_chunks)
         print(f"{course['code']}: {len(course_chunks)} chunks")
+
+    # Programme docs are a separate corpus from course data (not filtered by
+    # --courses) and always processed in full, since re-chunking is cheap
+    # and there's no per-major equivalent of --courses yet.
+    programme_paths = sorted(
+        p for p in PROGRAMME_DIR.glob("*.md") if not p.stem.startswith("_")
+    )
+    for path in programme_paths:
+        programme_chunks = build_programme_chunks(path)
+        all_chunks.extend(programme_chunks)
+        print(f"{path.stem} (programme): {len(programme_chunks)} chunks")
 
     CHUNKS_DIR.mkdir(parents=True, exist_ok=True)
     with CHUNKS_PATH.open("w", encoding="utf-8") as f:

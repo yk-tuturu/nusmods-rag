@@ -9,6 +9,22 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  # Whether this push touched the hand-curated degree-requirement docs -
+  # gates the re-embed step below so an unrelated code change (e.g. a UI
+  # tweak) doesn't also pay for a Chroma re-embed on every deploy.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      programme: ${{ steps.filter.outputs.programme }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            programme:
+              - 'backend/programme/**'
+
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
@@ -40,7 +56,7 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/nusmod-frontend:latest
 
   deploy:
-    needs: build-and-push
+    needs: [build-and-push, changes]
     runs-on: ubuntu-latest
     steps:
       - name: SSH in and redeploy
@@ -54,3 +70,28 @@ jobs:
             docker compose pull
             docker compose up -d
             docker image prune -f
+
+      # programme/*.md is baked into the backend image (see backend/Dockerfile),
+      # not bind-mounted like data/ - so the container above already has
+      # whatever's newest in programme/ once it restarts. This just needs to
+      # re-run chunk+embed so Chroma (which IS bind-mounted, at backend/data)
+      # actually reflects it - re-pulling the image alone doesn't touch
+      # Chroma. Runs directly against the live container via `exec` rather
+      # than the offline-build-then-atomic-swap dance scrape-prod.yml uses
+      # for the full scrape pipeline: programme docs are a small, fast corpus
+      # (see method_writeup.md), so the brief window where a concurrent
+      # request's Chroma client and this one-off upsert overlap is an
+      # accepted, low-consequence tradeoff for the simpler pipeline - not
+      # worth the extra staging/rsync machinery that a much larger, slower
+      # corpus (or a higher-traffic deployment) would justify.
+      - name: Re-embed programme docs
+        if: needs.changes.outputs.programme == 'true' || github.event_name == 'workflow_dispatch'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
+            cd ~/nusmods-rag
+            docker compose exec -T backend python src/pipeline/chunk.py
+            docker compose exec -T backend python src/pipeline/embed.py

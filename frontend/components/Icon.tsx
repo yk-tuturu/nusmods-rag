@@ -32,6 +32,9 @@ import {
   ShieldCheck,
   Sun,
   Moon,
+  X,
+  Clock,
+  Brain,
 } from "lucide-react";
 
 const ICONS: Record<string, LucideIcon> = {
@@ -70,6 +73,9 @@ const ICONS: Record<string, LucideIcon> = {
   light_mode: Sun,
   dark_mode: Moon,
   contrast: Monitor,
+  close: X,
+  schedule: Clock,
+  psychology: Brain,
 };
 
 export default function Icon({

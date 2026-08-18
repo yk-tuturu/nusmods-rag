@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY api.py refresh.sh ./
 COPY src/ src/
+COPY programme/ programme/
 RUN chmod +x refresh.sh
 
 # data/ is intentionally NOT copied in — it's scraped/derived, gitignored, and

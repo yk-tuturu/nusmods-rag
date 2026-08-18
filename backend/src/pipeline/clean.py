@@ -62,7 +62,10 @@ PROCESSED_DIR = BACKEND_DIR / "data" / "processed"
 def clean_html(raw_html: str) -> str:
     text = re.sub(r"<[^>]+>", "", raw_html or "")
     text = html.unescape(text)
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"[ \t]*\n[ \t]*", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def clean_reviews(raw_reviews: list[dict]) -> list[dict]:

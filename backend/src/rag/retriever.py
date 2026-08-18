@@ -17,6 +17,15 @@ Retrieves relevant chunks from the Chroma collection for a user query.
   from Chroma, then rerank the candidates by a composite score before
   truncating to k, rather than trusting Chroma's raw distance order as-is.
 
+Programme/degree-requirement content (chunk_type == "programme", see
+chunk.py's build_programme_chunks) is retrieved in a second, independent
+pass and merged in - see detect_programme_codes() and retrieve()'s
+docstring. Unlike course chunks, this pass only runs when there's an actual
+signal that the query is programme-related (a major named in the text, in
+recent history, or explicitly selected by the caller), so a plain course
+review question never gets an unrelated degree-requirement chunk forced
+into its context just because the pass always fires.
+
 Uses the same OpenAI embedding model as embed.py to embed the query, since
 embeddings must come from the same model as the stored vectors.
 """
@@ -41,6 +50,10 @@ except ImportError:  # running as a plain script rather than a package module
 CHROMA_DIR = BACKEND_DIR / "data" / "chroma_db"
 COLLECTION_NAME = "nusmods_reviews"
 DEFAULT_K = 8
+# Kept deliberately small relative to DEFAULT_K - programme docs are a
+# handful of already-focused sections (see chunk.py), not a large pool of
+# reviews, so a couple of chunks per matched major/GE is usually enough.
+DEFAULT_K_PROGRAMME = 3
 
 # How many extra candidates to pull from Chroma before reranking, so the
 # recency/reply-chain nudge below has something to reorder among near-ties
@@ -81,6 +94,71 @@ def detect_course_codes(query: str) -> list[str]:
         if code not in seen:
             seen.append(code)
     return seen
+
+
+def detect_course_codes_from_history(history: list[str]) -> list[str]:
+    """Course codes from prior conversation turns, for follow-ups that don't
+    repeat a code themselves (e.g. "what about the workload?" after a
+    message about CS2030S). Scans most-recent-first and returns the codes
+    from the first (most recent) turn that mentions any, so a newer course
+    mentioned later in the conversation takes precedence over an older one -
+    it does not merge codes across turns."""
+    for message in reversed(history):
+        codes = detect_course_codes(message)
+        if codes:
+            return codes
+    return []
+
+
+# Colloquial ways students refer to a programme, mapped to the
+# programme_code used in programme/<code>.md (and thus in chunk
+# metadata). Unlike course codes, major names don't follow a fixed format
+# ("CS" vs "Computer Science" vs "BComp(CS)"), so this is a maintained
+# lookup rather than a regex pattern - it only needs an entry per major
+# actually covered by a doc in programme/, so it stays small. "GE"
+# isn't a major but gets the same treatment since general-education
+# questions are asked the same way ("what GE courses satisfy X").
+PROGRAMME_ALIASES: dict[str, list[str]] = {
+    "CS": ["computer science", "comp sci", "cs", "bcomp(cs)", "bcomp cs"],
+    "BBA": ["business administration", "bba"],
+    "BAIS": ["business artificial intelligence systems", "bais"],
+    "BZA": ["business analytics", "bza"],
+    "InfoSec": ["information security", "infosec", "info security", "cybersecurity"],
+    "GE": ["general education", "gen ed", "ge pillar", "ge pillars"],
+}
+
+# One compiled pattern per alias, each anchored with \b so e.g. the bare
+# alias "cs" matches the standalone word "cs" but not the "cs" inside
+# "cs2030" (no word boundary between "s" and "2", since digits count as
+# word characters) - built once at import time rather than per call.
+_PROGRAMME_ALIAS_PATTERNS: list[tuple[str, re.Pattern]] = [
+    (code, re.compile(r"\b" + re.escape(alias) + r"\b", re.IGNORECASE))
+    for code, aliases in PROGRAMME_ALIASES.items()
+    for alias in aliases
+]
+
+
+def detect_programme_codes(query: str) -> list[str]:
+    """Every distinct programme_code whose alias appears in the query, in
+    PROGRAMME_ALIASES definition order (not order of appearance in the
+    text - unlike detect_course_codes, since a query naming several majors
+    doesn't imply any ordering between them). Empty list if none found."""
+    seen: list[str] = []
+    for code, pattern in _PROGRAMME_ALIAS_PATTERNS:
+        if code not in seen and pattern.search(query):
+            seen.append(code)
+    return seen
+
+
+def detect_programme_codes_from_history(history: list[str]) -> list[str]:
+    """Same idea as detect_course_codes_from_history: scans most-recent-first
+    and returns the programme codes from the first (most recent) turn that
+    mentions any."""
+    for message in reversed(history):
+        codes = detect_programme_codes(message)
+        if codes:
+            return codes
+    return []
 
 
 def _recency_factor(date_str: str | None) -> float:
@@ -132,12 +210,47 @@ def _query_chunks(collection, query_embedding, fetch_n: int, where: dict | None 
             "date": meta.get("date"),
             "likes": meta.get("likes"),
             "is_thread": bool(meta.get("is_thread")),
+            # Only meaningful on "programme" chunks (see chunk.py).
+            "programme_code": meta.get("programme_code") or None,
+            "section_title": meta.get("section_title") or None,
             "distance": dist,
         })
     return chunks
 
 
-def retrieve(query: str, k: int = DEFAULT_K, course_code: str | None = None) -> list[dict]:
+def _retrieve_programme_chunks(
+    collection,
+    query_embedding,
+    codes: set[str],
+    k_programme: int,
+) -> list[dict]:
+    """One query per programme code, each truncated to k_programme and then
+    merged - same "never let one crowd out another" reasoning as the
+    multi-course-code path in retrieve(), applied to majors instead of
+    courses (e.g. so a "CS vs BBA" comparison doesn't lose one major's
+    content just because the other's sections happen to rank higher)."""
+    fetch_n = k_programme * OVERFETCH_MULTIPLIER
+    merged: list[dict] = []
+    seen_ids: set[str] = set()
+    for code in codes:
+        where = {"$and": [{"chunk_type": "programme"}, {"programme_code": code}]}
+        code_chunks = _query_chunks(collection, query_embedding, fetch_n, where)
+        code_chunks.sort(key=lambda c: c["distance"])
+        for c in code_chunks[:k_programme]:
+            if c["id"] not in seen_ids:
+                merged.append(c)
+                seen_ids.add(c["id"])
+    return merged
+
+
+def retrieve(
+    query: str,
+    k: int = DEFAULT_K,
+    course_code: str | None = None,
+    history: list[str] | None = None,
+    programme_code: str | None = None,
+    k_programme: int = DEFAULT_K_PROGRAMME,
+) -> list[dict]:
     """Return relevant chunks for the query, each with metadata.
 
     - Zero or one course code (explicit `course_code` param, or exactly one
@@ -148,36 +261,82 @@ def retrieve(query: str, k: int = DEFAULT_K, course_code: str | None = None) -> 
       truncated to k EACH, then merged - so a comparison gets up to k
       chunks per course (not k split across them), and no single course's
       chunks can crowd another's out of the result entirely.
+    - No course code in the query itself but `history` is given: falls back
+      to the most recent course code(s) mentioned earlier in the
+      conversation, so a follow-up question inherits the course being
+      discussed instead of losing the filter.
+
+    Programme/degree-requirement chunks are then retrieved in a second pass
+    and appended (deduplicated by id):
+    - Any major named in the query text or recent history (via
+      detect_programme_codes) always gets its own guaranteed slice.
+    - `programme_code` (e.g. a frontend major selector) is unioned in too,
+      even if the query names a *different* major - so "I'm doing BBA but
+      what does CS need" surfaces both instead of silently picking one.
+    - This whole pass is skipped if neither of the above found anything, so
+      an ordinary course-review question never gets a forced, likely
+      irrelevant programme chunk added just because the pass always runs.
+      Once it does run, "GE" (general education) is always included
+      alongside whatever major(s) triggered it, since GE content is
+      relevant regardless of major.
     """
     collection = _get_collection()
     query_embedding = embed_texts([query])
     fetch_n = k * OVERFETCH_MULTIPLIER
 
     codes = [course_code] if course_code else detect_course_codes(query)
+    if not codes and history:
+        codes = detect_course_codes_from_history(history)
 
     if len(codes) > 1:
-        merged = []
+        chunks = []
         for code in codes:
             course_chunks = _query_chunks(collection, query_embedding, fetch_n, {"course_code": code})
             course_chunks.sort(key=_rerank_score)
-            merged.extend(course_chunks[:k])
-        return merged
+            chunks.extend(course_chunks[:k])
+    else:
+        code = codes[0] if codes else None
+        # Excludes "programme" chunks specifically from the *unfiltered*
+        # semantic search - a real course_code filter already excludes them
+        # implicitly (programme chunks have no course_code), but without
+        # this, an unfiltered query can pull in another major's programme
+        # chunk purely because its boilerplate ("Bachelor of Computing...
+        # 160 units...") is semantically close, which is confusing noise
+        # for a course-review question and is what the dedicated
+        # _retrieve_programme_chunks pass below exists to handle properly.
+        where = {"course_code": code} if code else {"chunk_type": {"$ne": "programme"}}
+        chunks = _query_chunks(collection, query_embedding, fetch_n, where)
 
-    code = codes[0] if codes else None
-    where = {"course_code": code} if code else None
-    chunks = _query_chunks(collection, query_embedding, fetch_n, where)
+        # If a course-code filter returned nothing (e.g. course has no data yet),
+        # fall back to an unfiltered (but still non-programme) semantic search
+        # rather than returning empty.
+        if not chunks and code:
+            chunks = _query_chunks(collection, query_embedding, fetch_n, {"chunk_type": {"$ne": "programme"}})
 
-    # If a course-code filter returned nothing (e.g. course has no data yet),
-    # fall back to an unfiltered semantic search rather than returning empty.
-    if not chunks and where:
-        chunks = _query_chunks(collection, query_embedding, fetch_n)
+        chunks.sort(key=_rerank_score)
+        chunks = chunks[:k]
 
-    chunks.sort(key=_rerank_score)
-    return chunks[:k]
+    programme_codes = set(detect_programme_codes(query))
+    if not programme_codes and history:
+        programme_codes = set(detect_programme_codes_from_history(history))
+    if programme_code:
+        programme_codes.add(programme_code)
+
+    if programme_codes:
+        programme_codes.add("GE")
+        programme_chunks = _retrieve_programme_chunks(collection, query_embedding, programme_codes, k_programme)
+        seen_ids = {c["id"] for c in chunks}
+        for pc in programme_chunks:
+            if pc["id"] not in seen_ids:
+                chunks.append(pc)
+                seen_ids.add(pc["id"])
+
+    return chunks
 
 
 if __name__ == "__main__":
     import sys
     q = " ".join(sys.argv[1:]) or "is CS2030 hard for beginners?"
     for c in retrieve(q):
-        print(f"[{c['chunk_type']}] {c['course_code']} (dist={c['distance']:.3f}): {c['text'][:100]}...")
+        label = c["course_code"] or f"{c['programme_code']}/{c['section_title']}"
+        print(f"[{c['chunk_type']}] {label} (dist={c['distance']:.3f}): {c['text'][:100]}...")

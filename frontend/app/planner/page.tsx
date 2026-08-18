@@ -7,25 +7,20 @@ const MODULES = [
     title: "Programming Methodology II",
     mcs: 4,
     status: "satisfied" as const,
-    slots: [
-      { icon: "save_as", color: "text-tertiary", label: "LEC [1]: Mon 1000-1200", error: false },
-      { icon: "computer", color: "text-secondary", label: "LAB [12]: Wed 1400-1600", error: false },
-    ],
+    hours: "Lecture: 2 hrs/wk | Lab: 2 hrs/wk",
+    difficulty: 4.5,
+    summary:
+      "A demanding module focusing on object-oriented and functional programming with strict grading.",
   },
   {
     code: "CS2100",
     title: "Computer Organisation",
     mcs: 4,
     status: "conflict" as const,
-    slots: [
-      {
-        icon: "save_as",
-        color: "text-error",
-        label: "LEC [1]: Mon 1100-1300 (Clashes with CS2030S)",
-        error: true,
-      },
-      { icon: "group", color: "text-secondary", label: "TUT [5]: Thu 1000-1100", error: false },
-    ],
+    hours: "Lecture: 2 hrs/wk | Tutorial: 1 hr/wk | Lab: 1 hr/wk",
+    difficulty: 4.2,
+    summary:
+      "Covers C programming and low-level hardware concepts; manageable if you keep up with weekly labs.",
   },
 ];
 
@@ -78,22 +73,24 @@ export default function PlannerPage() {
               <p className="font-body-sm text-body-sm text-on-surface-variant mb-sm">
                 {mod.title}
               </p>
-              <div className="flex flex-wrap gap-xs mb-sm">
-                {mod.slots.map((slot) => (
-                  <div
-                    key={slot.label}
-                    className={`px-2 py-1 rounded border flex items-center gap-1 ${
-                      slot.error
-                        ? "bg-error-container/30 border-error-red/50"
-                        : "bg-surface-container-low border-surface-variant"
-                    }`}
-                  >
-                    <Icon name={slot.icon} className={slot.color} size={14} />
-                    <span className={`font-label-sm text-label-sm font-mono ${slot.color}`}>
-                      {slot.label}
+              <div className="flex flex-col gap-2 mb-sm">
+                <div className="flex flex-wrap gap-xs">
+                  <div className="bg-surface-container-low px-2 py-1 rounded border border-surface-variant flex items-center gap-1">
+                    <Icon name="schedule" className="text-tertiary" size={14} />
+                    <span className="font-label-sm text-label-sm font-mono text-tertiary">
+                      {mod.hours}
                     </span>
                   </div>
-                ))}
+                  <div className="bg-surface-container-low px-2 py-1 rounded border border-surface-variant flex items-center gap-1">
+                    <Icon name="psychology" className="text-primary" size={14} />
+                    <span className="font-label-sm text-label-sm font-mono text-primary">
+                      AI Difficulty: {mod.difficulty}/5
+                    </span>
+                  </div>
+                </div>
+                <p className="text-[13px] text-on-surface-variant">
+                  <strong className="text-on-surface">AI Summary:</strong> {mod.summary}
+                </p>
               </div>
               <div className="text-[12px] text-on-surface-variant flex justify-between items-center pt-xs border-t border-surface-variant">
                 <span>{mod.mcs} MCs</span>
