@@ -147,20 +147,20 @@ def format_context(chunks: list[dict]) -> str:
 def answer_question(
     query: str,
     k: int = 8,
-    course_code: str | None = None,
+    course_codes: list[str] | None = None,
     history: list[dict] | None = None,
-    programme_code: str | None = None,
+    programme_codes: list[str] | None = None,
 ) -> dict:
     """`history` is prior turns as [{"role": "user"|"assistant", "content": str}, ...]
-    in chronological order, NOT including the current `query`. `programme_code`
-    is the student's selected major (e.g. from a frontend selector), if any -
-    see retrieve()'s docstring for how it combines with majors named in the
-    query/history text."""
+    in chronological order, NOT including the current `query`. `programme_codes`
+    are the student's selected major(s) (e.g. from a frontend multi-select), if
+    any - see retrieve()'s docstring for how they combine with majors named in
+    the query/history text."""
     recent_history = (history or [])[-MAX_HISTORY_MESSAGES:]
     history_texts = [m["content"] for m in recent_history]
 
     chunks = retrieve(
-        query, k=k, course_code=course_code, history=history_texts, programme_code=programme_code
+        query, k=k, course_codes=course_codes, history=history_texts, programme_codes=programme_codes
     )
 
     if not chunks:
@@ -184,15 +184,28 @@ def answer_question(
     # user), the model would guess "my major" meant CS purely because CS
     # course codes were the ones it saw most, even with the *actual* selected
     # major's programme chunk sitting right there in the same Context. Naming
-    # the selected major directly removes the need for the model to infer it.
-    if programme_code:
-        reminder += (
-            f" The user's selected major is \"{programme_code}\" - if they refer to "
-            f"\"my major\"/\"my degree\" without naming one, that means {programme_code} "
-            "specifically. Do not infer a different major from which course codes "
-            "happen to appear in the Context - course chunks aren't tied to any "
-            "particular major."
-        )
+    # the selected major(s) directly removes the need for the model to infer it.
+    if programme_codes:
+        majors_list = ", ".join(programme_codes)
+        if len(programme_codes) > 1:
+            reminder += (
+                f" The user has selected multiple majors: {majors_list}. If they refer to "
+                "\"my major\"/\"my degree\" without naming one, treat it as referring to "
+                "whichever of these the question is actually about (or all of them, if the "
+                "question doesn't distinguish); if a course is required for one selected "
+                "major but not another, say so explicitly per major rather than blending "
+                "them into one answer. Do not infer a different major from which course "
+                "codes happen to appear in the Context - course chunks aren't tied to any "
+                "particular major."
+            )
+        else:
+            reminder += (
+                f" The user's selected major is \"{majors_list}\" - if they refer to "
+                f"\"my major\"/\"my degree\" without naming one, that means {majors_list} "
+                "specifically. Do not infer a different major from which course codes "
+                "happen to appear in the Context - course chunks aren't tied to any "
+                "particular major."
+            )
     # Repeated here, close to this turn's actual Context, rather than relying
     # solely on the general instruction in SYSTEM_PROMPT - a reminder tied to
     # what's actually retrieved this turn is followed far more reliably than

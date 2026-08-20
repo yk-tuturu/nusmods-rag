@@ -69,12 +69,22 @@ jobs:
       # failed deploy (without itself touching programme/) would skip this
       # step and leave Chroma stuck on stale programme content indefinitely.
       # Running it every time is self-correcting regardless of what broke a
-      # prior deploy. This is only cheap enough to do unconditionally because
-      # of two things below: --programme-only avoids re-deriving chunks.jsonl
-      # from the full (potentially catalog-sized) data/processed/ - a bare
-      # `chunk.py` doing that previously OOM-killed this step on the VM - and
-      # embed.py skips the OpenAI call entirely for any chunk whose text is
-      # unchanged, so a no-op run costs nothing beyond a quick file diff.
+      # prior deploy.
+      #
+      # --programme-only and embed.py's skip-unchanged logic were meant to
+      # make a no-op run cheap, and they do cut CPU cost - but they don't
+      # address the actual OOM cause hit here: `docker compose exec` opens a
+      # SECOND, independent Chroma client against the live collection while
+      # the backend's own client is still loaded, and Chroma has to load the
+      # full vector index (not just the rows being touched) for either
+      # client to work at all. At the production collection's size
+      # (12,000+ vectors, once real course data is scraped in) two loaded
+      # copies of that index is what exceeded the VM's memory - a problem
+      # that scales with total collection size, not with how much actually
+      # changed, so --programme-only alone couldn't fix it. Stopping the
+      # backend first means only one Chroma client is ever loaded at once,
+      # at the cost of a few seconds of API downtime during deploy - already
+      # true of the plain restart above, just slightly extended here.
       - name: Re-embed programme docs
         uses: appleboy/ssh-action@v1
         with:
@@ -83,5 +93,6 @@ jobs:
           key: ${{ secrets.VM_SSH_KEY }}
           script: |
             cd ~/nusmods-rag
-            docker compose exec -T backend python src/pipeline/chunk.py --programme-only
-            docker compose exec -T backend python src/pipeline/embed.py
+            docker compose stop backend
+            docker compose run --rm backend sh -c "python src/pipeline/chunk.py --programme-only && python src/pipeline/embed.py"
+            docker compose up -d backend

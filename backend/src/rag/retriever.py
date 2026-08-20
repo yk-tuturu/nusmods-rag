@@ -246,33 +246,35 @@ def _retrieve_programme_chunks(
 def retrieve(
     query: str,
     k: int = DEFAULT_K,
-    course_code: str | None = None,
+    course_codes: list[str] | None = None,
     history: list[str] | None = None,
-    programme_code: str | None = None,
+    programme_codes: list[str] | None = None,
     k_programme: int = DEFAULT_K_PROGRAMME,
 ) -> list[dict]:
     """Return relevant chunks for the query, each with metadata.
 
-    - Zero or one course code (explicit `course_code` param, or exactly one
+    - Zero or one course code (explicit `course_codes` param, or exactly one
       detected in the query text): a single over-fetch-then-rerank pass,
       truncated to k - same behavior as before.
-    - Multiple course codes detected (e.g. a "compare X vs Y" question):
-      each course gets its own independent over-fetch-then-rerank pass,
-      truncated to k EACH, then merged - so a comparison gets up to k
-      chunks per course (not k split across them), and no single course's
-      chunks can crowd another's out of the result entirely.
-    - No course code in the query itself but `history` is given: falls back
-      to the most recent course code(s) mentioned earlier in the
-      conversation, so a follow-up question inherits the course being
-      discussed instead of losing the filter.
+    - Multiple course codes (explicit `course_codes` param, e.g. a frontend
+      scope multi-select, or several detected in the query text, e.g. a
+      "compare X vs Y" question): each course gets its own independent
+      over-fetch-then-rerank pass, truncated to k EACH, then merged - so a
+      comparison gets up to k chunks per course (not k split across them),
+      and no single course's chunks can crowd another's out of the result
+      entirely.
+    - No course code in the query itself and no explicit `course_codes` but
+      `history` is given: falls back to the most recent course code(s)
+      mentioned earlier in the conversation, so a follow-up question
+      inherits the course being discussed instead of losing the filter.
 
     Programme/degree-requirement chunks are then retrieved in a second pass
     and appended (deduplicated by id):
     - Any major named in the query text or recent history (via
       detect_programme_codes) always gets its own guaranteed slice.
-    - `programme_code` (e.g. a frontend major selector) is unioned in too,
-      even if the query names a *different* major - so "I'm doing BBA but
-      what does CS need" surfaces both instead of silently picking one.
+    - `programme_codes` (e.g. a frontend major multi-select) are unioned in
+      too, even if the query names a *different* major - so "I'm doing BBA
+      but what does CS need" surfaces both instead of silently picking one.
     - This whole pass is skipped if neither of the above found anything, so
       an ordinary course-review question never gets a forced, likely
       irrelevant programme chunk added just because the pass always runs.
@@ -284,7 +286,7 @@ def retrieve(
     query_embedding = embed_texts([query])
     fetch_n = k * OVERFETCH_MULTIPLIER
 
-    codes = [course_code] if course_code else detect_course_codes(query)
+    codes = list(course_codes) if course_codes else detect_course_codes(query)
     if not codes and history:
         codes = detect_course_codes_from_history(history)
 
@@ -316,15 +318,17 @@ def retrieve(
         chunks.sort(key=_rerank_score)
         chunks = chunks[:k]
 
-    programme_codes = set(detect_programme_codes(query))
-    if not programme_codes and history:
-        programme_codes = set(detect_programme_codes_from_history(history))
-    if programme_code:
-        programme_codes.add(programme_code)
-
+    detected_programme_codes = set(detect_programme_codes(query))
+    if not detected_programme_codes and history:
+        detected_programme_codes = set(detect_programme_codes_from_history(history))
     if programme_codes:
-        programme_codes.add("GE")
-        programme_chunks = _retrieve_programme_chunks(collection, query_embedding, programme_codes, k_programme)
+        detected_programme_codes.update(programme_codes)
+
+    if detected_programme_codes:
+        detected_programme_codes.add("GE")
+        programme_chunks = _retrieve_programme_chunks(
+            collection, query_embedding, detected_programme_codes, k_programme
+        )
         seen_ids = {c["id"] for c in chunks}
         for pc in programme_chunks:
             if pc["id"] not in seen_ids:
