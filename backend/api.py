@@ -127,12 +127,17 @@ def chat(req: ChatRequest):
         raise HTTPException(status_code=400, detail="question must not be empty")
 
     history = [m.model_dump() for m in req.history]
+    # answer_question()/retrieve() take course_codes/programme_codes as lists
+    # (to support multiple codes detected in query text, or a future
+    # frontend multi-select - see retriever.py's retrieve() docstring); the
+    # request/frontend contract here is still a single optional code each,
+    # so wrap into a one-element list rather than changing that contract.
     result = answer_question(
         req.question,
         k=req.k,
-        course_code=req.course_code,
+        course_codes=[req.course_code] if req.course_code else None,
         history=history,
-        programme_code=req.programme_code,
+        programme_codes=[req.programme_code] if req.programme_code else None,
     )
     return ChatResponse(answer=result["answer"], sources=result["sources"])
 
