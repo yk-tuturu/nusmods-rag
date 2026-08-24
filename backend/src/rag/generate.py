@@ -77,15 +77,25 @@ requirements, electives) - state plainly as fact, never as opinion, and never bl
 conflicting-opinions handling used for reviews.
 
 REQUIRED COURSES
-Whenever a "programme" entry lists the course being discussed as compulsory, core, or otherwise \
-required for a major (as opposed to elective), state that plainly and explicitly, as its own \
-clearly flagged sentence near the start of the answer, separate from workload/difficulty \
-commentary - e.g. "CS2030S is a compulsory Computer Science Foundation course for the CS major \
-and must be completed to graduate." Do not soften this to vague language like "foundational" or \
-"important," and do not let review sentiment about difficulty change whether you state it. Only \
-make this claim when a "programme" entry actually supports it for the major in question; if no \
-programme Context is present, or it doesn't mention the course, do not claim or deny that it's \
-required - say you're unsure instead of guessing.
+Whenever a "programme" entry lists the course being discussed as INDIVIDUALLY mandatory for a \
+major - i.e. every student in that major must take that specific course, typically listed under \
+a section like "Foundation," "Core Courses," "Common Curriculum," or explicitly called \
+compulsory in the text - state that plainly and explicitly, as its own clearly flagged sentence \
+near the start of the answer, separate from workload/difficulty commentary - e.g. "CS2030S is a \
+compulsory Computer Science Foundation course for the CS major and must be completed to \
+graduate." Do not soften this to vague language like "foundational" or "important," and do not \
+let review sentiment about difficulty change whether you state it.
+
+Do NOT call a course "compulsory" or "required" just because it appears somewhere in a \
+"programme" entry - most programme documents also list courses that are optional CHOICES within \
+a constraint, not individually mandatory. In particular, a course listed under a Focus Area's \
+elective list (e.g. CS's "Area Primaries," where a student picks a few from many to satisfy one \
+focus area among a broader elective-units requirement), a "Programme Elective(s)" list, or a \
+Specialisation's course list is one OPTION among several, not something every student in that \
+major must take - describe it as an elective/focus-area option instead, even though it's in a \
+"programme" entry. Only make an individual-requirement claim when a "programme" entry actually \
+supports it for the major in question; if no programme Context is present, or it doesn't mention \
+the course, do not claim or deny that it's required - say you're unsure instead of guessing.
 
 PRECISION AND STYLE
 - Answer the actual question first - lead with the specific number, requirement, or verdict \
@@ -212,10 +222,17 @@ def answer_question(
     # a standing rule stated once, further up, in the abstract.
     if any(c["chunk_type"] == "programme" for c in chunks):
         reminder += (
-            " If a \"programme\" entry above lists the course(s) being discussed "
-            "as compulsory/required/core for a major, you MUST say so explicitly "
-            "and plainly (e.g. \"is a compulsory/required course for the CS major\") "
-            "rather than only softer language like \"foundational\" or \"important\"."
+            " If a \"programme\" entry above lists the course(s) being discussed as "
+            "INDIVIDUALLY compulsory/required/core for a major (i.e. every student in "
+            "that major must take that specific course - typically under a "
+            "Foundation/Core Courses/Common Curriculum section), you MUST say so "
+            "explicitly and plainly (e.g. \"is a compulsory/required course for the CS "
+            "major\") rather than only softer language like \"foundational\" or "
+            "\"important\". But do NOT call it compulsory/required if it's merely one "
+            "option in a Focus Area's elective list, a \"Programme Elective(s)\" list, "
+            "or a Specialisation's course list - those are choices among several, not "
+            "individual requirements, even though they appear in a \"programme\" entry; "
+            "describe those as elective/focus-area options instead."
         )
     else:
         # Explicit suppression, not just omission - gpt-4o-mini has enough

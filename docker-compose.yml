@@ -1,13 +1,3 @@
-# Production compose file — pulls pre-built images from GHCR rather than
-# building on the VM (the VM is small; building sentence-transformers/torch
-# and the Next.js frontend on it is slow and memory-hungry compared to doing
-# it on a GitHub Actions runner and just pulling the finished image).
-#
-# For local development, use `docker compose -f docker-compose.dev.yml up`
-# instead, which builds from source.
-
-# Anchor holding everything the backend image needs, reused by both the
-# always-on API service and the on-demand scraper below so they don't drift.
 x-backend-image: &backend-image
   image: ghcr.io/yk-tuturu/nusmod-backend:latest
   env_file:
@@ -23,48 +13,50 @@ services:
     volumes:
       - ./backend/data:/app/data
     restart: unless-stopped
+    labels:
+      caddy: api.nusadvice.ykkoh.com          # replace with whatever's in your current Caddyfile
+      caddy.reverse_proxy: "{{upstreams 8000}}"  # the port the backend actually listens on inside the container
 
-  # Not part of `docker compose up` — the "tools" profile means this only
-  # starts when explicitly asked for. Writes to data.new, NOT data — it
-  # never touches the directory the live backend is reading from. Use
-  # refresh_data.sh to run this and safely swap the result into place;
-  # don't invoke this service directly unless you're happy doing that
-  # swap yourself.
   scraper:
     <<: *backend-image
     entrypoint: ["./refresh.sh"]
     profiles: ["tools"]
     volumes:
       - ./backend/data.new:/app/data
-    # Backend image doesn't set a non-root USER, so without this the
-    # container writes to the bind mount as root, leaving files the host
-    # user can't clean up without sudo. UID/GID come from refresh_data.sh.
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    # no caddy labels — this one's never web-facing
 
   frontend:
     image: ghcr.io/yk-tuturu/nusmod-frontend:latest
     restart: unless-stopped
     networks:
       - internal
+    labels:
+      caddy: nusadvice.ykkoh.com               
+      caddy.reverse_proxy: "{{upstreams 3000}}"
 
   caddy:
-    image: caddy:2-alpine
+    image: lucaslorentz/caddy-docker-proxy:2
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - caddy_data:/data
       - caddy_config:/config
     restart: unless-stopped
     networks:
       - internal
+    environment:
+      - CADDY_INGRESS_NETWORKS=internal
     depends_on:
       - backend
       - frontend
 
 networks:
   internal:
+    external: true
+    name: caddy_shared_net
 
 volumes:
   caddy_data:
