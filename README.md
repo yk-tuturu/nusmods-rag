@@ -11,7 +11,6 @@ comments scraped from Disqus.
 - `frontend/` — Next.js chat UI that calls the FastAPI backend.
 - `docker-compose.yml` / `docker-compose.dev.yml` — production (pulls
   prebuilt images from GHCR) and local dev (builds from source) stacks.
-- `Caddyfile` — reverse proxy + automatic HTTPS config used in production.
 - `refresh_data.sh` — safely refreshes `backend/data` without exposing the
   live backend to a half-written directory (see **For Deployment**).
 - `.github/workflows/` — CI/CD (`deploy.yml`) and scheduled/manual data
@@ -146,10 +145,14 @@ re-embed without re-scraping).
 
 A single VM runs three containers via `docker-compose.yml`: `backend`
 (FastAPI, image pulled from GHCR), `frontend` (Next.js, standalone output,
-also from GHCR), and `caddy` (reverse proxy + automatic Let's Encrypt
-HTTPS — the only service with ports published to the host). `backend` and
-`frontend` are reachable only from `caddy` over an internal Docker
-network, never directly from the internet.
+also from GHCR), and `caddy` (running as [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy),
+which watches the Docker socket and derives its routes from `caddy.*`
+labels on `backend`/`frontend` in `docker-compose.yml` — there's no static
+Caddyfile to edit). `caddy` is the only service with ports published to
+the host; `backend` and `frontend` are reachable only from `caddy`, over
+the external `caddy_shared_net` Docker network (kept external/shared
+rather than compose-managed so other stacks on the same VM can register
+routes with this same Caddy instance later).
 
 - `nusadvice.ykkoh.com` → `caddy` → `frontend`
 - `api.ykkoh.com` → `caddy` → `backend`
@@ -179,11 +182,15 @@ personal one — its public half needs to be in that user's
 4. DNS: `A` records for both domains pointing at the VM's **static**
    external IP (promote it from ephemeral first — an ephemeral IP can
    change on VM restart and silently break DNS).
-5. `docker compose up -d` once, manually, to bring the stack up for the
+5. `docker network create caddy_shared_net` — `docker-compose.yml`
+   declares this network as external so other stacks can share the same
+   Caddy instance later, which means compose won't create it for you;
+   `docker compose up` fails until it exists.
+6. `docker compose up -d` once, manually, to bring the stack up for the
    first time and let Caddy provision its certificates (needs DNS already
    resolving and 80/443 actually reachable — check both VPC firewall rules
    *and* `ufw`, they're independent layers).
-6. Populate `backend/data` — see below. The site has no course data until
+7. Populate `backend/data` — see below. The site has no course data until
    this has run at least once.
 
 After that, `git push` to `master` handles redeploys on its own.
