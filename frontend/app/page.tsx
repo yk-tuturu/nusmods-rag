@@ -29,8 +29,8 @@ const FEATURES = [
     title: "Course Reviews",
     description:
       "Access aggregated sentiment analysis from past students. Understand workload expectations and teaching quality at a glance.",
-    cta: "Read Reviews",
-    href: "/reviews",
+    cta: "Learn More",
+    href: "/chat",
   },
 ];
 
@@ -82,34 +82,6 @@ export default function Home() {
           ))}
         </section>
       </main>
-
-      <footer className="bg-surface-container-highest w-full py-lg mt-auto hidden md:block border-t border-outline-variant">
-        <div className="flex flex-col md:flex-row justify-between items-center px-margin-desktop max-w-[1200px] mx-auto w-full gap-md">
-          <span className="font-body-sm text-body-sm text-on-surface-variant">
-            © 2026 NUS AI Advisor. Academic data sourced from NUSMods.
-          </span>
-          <div className="flex gap-md">
-            <a
-              className="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors"
-              href="#"
-            >
-              Terms of Service
-            </a>
-            <a
-              className="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors"
-              href="#"
-            >
-              Privacy Policy
-            </a>
-            <a
-              className="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors"
-              href="#"
-            >
-              Contact Support
-            </a>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }

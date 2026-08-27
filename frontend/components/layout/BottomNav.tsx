@@ -7,7 +7,8 @@ import Icon from "@/components/Icon";
 const NAV_ITEMS = [
   { href: "/chat", label: "Chat", icon: "chat_bubble" },
   { href: "/planner", label: "Planner", icon: "calendar_today" },
-  { href: "/reviews", label: "Reviews", icon: "rate_review" },
+  // Reviews tab hidden for now; keep entry around for when it's re-enabled.
+  // { href: "/reviews", label: "Reviews", icon: "rate_review" },
 ];
 
 export default function BottomNav() {

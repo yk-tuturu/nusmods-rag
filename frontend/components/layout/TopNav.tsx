@@ -7,7 +7,8 @@ import Icon from "@/components/Icon";
 const NAV_LINKS = [
   { href: "/chat", label: "Chat" },
   { href: "/planner", label: "Planner" },
-  { href: "/reviews", label: "Reviews" },
+  // Reviews tab hidden for now; keep entry around for when it's re-enabled.
+  // { href: "/reviews", label: "Reviews" },
 ];
 
 export default function TopNav() {
