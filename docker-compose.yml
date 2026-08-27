@@ -35,32 +35,10 @@ services:
       caddy: nusadvice.ykkoh.com
       caddy.reverse_proxy: "{{upstreams 3000}}"
 
-  caddy:
-    image: lucaslorentz/caddy-docker-proxy:2
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    restart: unless-stopped
-    networks:
-      - internal
-    environment:
-      # Real Docker network name, not the compose-local "internal" alias --
-      # caddy-docker-proxy inspects containers via the Docker API directly,
-      # which only knows networks by their actual name.
-      - CADDY_INGRESS_NETWORKS=caddy_shared_net
-    depends_on:
-      - backend
-      - frontend
-
 networks:
+  # Caddy itself lives in a separate, standalone stack (~/reverse-proxy on
+  # the VM) shared across multiple apps on the box -- this project only
+  # joins its network via labels, it doesn't own or run Caddy.
   internal:
     external: true
     name: caddy_shared_net
-
-volumes:
-  caddy_data:
-  caddy_config:
