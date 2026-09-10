@@ -44,11 +44,6 @@ export default function TopNav() {
             );
           })}
         </nav>
-        <div className="flex items-center gap-sm">
-          <div className="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center text-on-secondary-container font-label-md text-label-md font-mono">
-            UP
-          </div>
-        </div>
       </div>
     </header>
   );

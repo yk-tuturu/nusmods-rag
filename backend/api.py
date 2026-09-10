@@ -16,10 +16,11 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from src.pipeline.summarize import load_cached_summary
-from src.rag.generate import answer_question
+from src.rag.generate import answer_question, stream_answer_question
 from src.scrape import nusmods_api
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -140,6 +141,31 @@ def chat(req: ChatRequest):
         programme_codes=[req.programme_code] if req.programme_code else None,
     )
     return ChatResponse(answer=result["answer"], sources=result["sources"])
+
+
+@app.post("/chat/stream")
+def chat_stream(req: ChatRequest):
+    if not req.question.strip():
+        raise HTTPException(status_code=400, detail="question must not be empty")
+
+    history = [m.model_dump() for m in req.history]
+
+    def event_source():
+        for event in stream_answer_question(
+            req.question,
+            k=req.k,
+            course_codes=[req.course_code] if req.course_code else None,
+            history=history,
+            programme_codes=[req.programme_code] if req.programme_code else None,
+        ):
+            yield f"data: {json.dumps(event)}\n\n"
+        yield "data: {\"type\": \"done\"}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/courses", response_model=list[CourseSummary])

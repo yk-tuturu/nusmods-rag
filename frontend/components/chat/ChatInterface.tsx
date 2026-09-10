@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  sendChat,
+  sendChatStream,
   getCourses,
   getProgrammes,
   type ChatMessage,
@@ -34,6 +34,11 @@ export default function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  // True once the assistant's reply bubble has been created and tokens are
+  // streaming into it - distinct from `loading`, which covers the whole
+  // request lifecycle (used to disable input) and stays true a little
+  // longer, while the last chunk is still in flight.
+  const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [courses, setCourses] = useState<CourseSummary[]>([]);
   const [selectedCourse, setSelectedCourse] = useState<string>("");
@@ -75,23 +80,36 @@ export default function ChatInterface() {
       { id: makeId(), role: "user", text: question, timestamp: timestamp() },
     ]);
     setLoading(true);
+    setStreaming(false);
+
+    const assistantId = makeId();
 
     try {
-      const result = await sendChat(question, selectedCourse || undefined, history, selectedMajor || undefined);
-      setMessages((prev) => [
-        ...prev,
+      await sendChatStream(
+        question,
         {
-          id: makeId(),
-          role: "assistant",
-          text: result.answer,
-          sources: result.sources,
-          timestamp: timestamp(),
+          onSources: (sources) => {
+            setStreaming(true);
+            setMessages((prev) => [
+              ...prev,
+              { id: assistantId, role: "assistant", text: "", sources, timestamp: timestamp() },
+            ]);
+          },
+          onToken: (delta) => {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantId ? { ...m, text: m.text + delta } : m))
+            );
+          },
         },
-      ]);
+        selectedCourse || undefined,
+        history,
+        selectedMajor || undefined
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setLoading(false);
+      setStreaming(false);
     }
   }
 
@@ -160,13 +178,18 @@ export default function ChatInterface() {
             <MessageBubble key={m.id} message={m} />
           ))}
 
-          {loading && (
+          {loading && !streaming && (
             <div className="flex gap-sm self-start max-w-[90%]">
               <div className="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center flex-shrink-0">
                 <Icon name="smart_toy" className="text-on-secondary-container" size={16} />
               </div>
-              <div className="bg-surface-container-lowest text-on-surface-variant p-sm rounded-xl border border-surface-variant shadow-sm">
-                Thinking…
+              <div className="bg-surface-container-lowest text-on-surface-variant p-sm rounded-xl border border-surface-variant shadow-sm flex items-center gap-1.5">
+                <span className="font-body-md text-body-md">Thinking</span>
+                <span className="flex items-end gap-1 pb-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-on-surface-variant animate-bounce [animation-delay:-0.3s]" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-on-surface-variant animate-bounce [animation-delay:-0.15s]" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-on-surface-variant animate-bounce" />
+                </span>
               </div>
             </div>
           )}

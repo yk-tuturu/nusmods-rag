@@ -74,6 +74,67 @@ export async function sendChat(
   return res.json();
 }
 
+export interface StreamCallbacks {
+  onSources?: (sources: SourceChunk[]) => void;
+  onToken?: (text: string) => void;
+}
+
+// Reads the /chat/stream SSE response and dispatches each event to the
+// matching callback as it arrives, rather than waiting for the full
+// response body like sendChat() does.
+export async function sendChatStream(
+  question: string,
+  callbacks: StreamCallbacks,
+  courseCode?: string | null,
+  history?: ChatMessage[],
+  programmeCode?: string | null
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      question,
+      course_code: courseCode || null,
+      programme_code: programmeCode || null,
+      history: history ?? [],
+    }),
+  });
+
+  if (!res.ok || !res.body) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Chat request failed (${res.status}): ${detail}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE events are separated by a blank line; each event's payload is
+    // the "data: <json>" line within it.
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+
+    for (const raw of events) {
+      const line = raw.trim();
+      if (!line.startsWith("data:")) continue;
+      const payload = JSON.parse(line.slice("data:".length).trim());
+
+      if (payload.type === "sources") {
+        callbacks.onSources?.(payload.sources);
+      } else if (payload.type === "token") {
+        callbacks.onToken?.(payload.text);
+      } else if (payload.type === "done") {
+        return;
+      }
+    }
+  }
+}
+
 export async function getCourses(): Promise<CourseSummary[]> {
   const res = await fetch(`${API_BASE}/courses`);
   if (!res.ok) {

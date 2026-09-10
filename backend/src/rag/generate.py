@@ -154,18 +154,17 @@ def format_context(chunks: list[dict]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
-def answer_question(
+def _build_prompt(
     query: str,
-    k: int = 8,
-    course_codes: list[str] | None = None,
-    history: list[dict] | None = None,
-    programme_codes: list[str] | None = None,
-) -> dict:
-    """`history` is prior turns as [{"role": "user"|"assistant", "content": str}, ...]
-    in chronological order, NOT including the current `query`. `programme_codes`
-    are the student's selected major(s) (e.g. from a frontend multi-select), if
-    any - see retrieve()'s docstring for how they combine with majors named in
-    the query/history text."""
+    k: int,
+    course_codes: list[str] | None,
+    history: list[dict] | None,
+    programme_codes: list[str] | None,
+) -> tuple[list[dict], list[dict]] | None:
+    """Shared retrieval + prompt-construction for both answer_question() and
+    stream_answer_question(). Returns (messages, sources), or None if
+    retrieval found nothing (callers should show the canned "couldn't find"
+    response in that case)."""
     recent_history = (history or [])[-MAX_HISTORY_MESSAGES:]
     history_texts = [m["content"] for m in recent_history]
 
@@ -174,13 +173,9 @@ def answer_question(
     )
 
     if not chunks:
-        return {
-            "answer": "I couldn't find any relevant course data to answer that question.",
-            "sources": [],
-        }
+        return None
 
     context = format_context(chunks)
-    client = _get_client()
 
     reminder = (
         "(Answer using only the Context above. Do not mention any course code "
@@ -254,17 +249,6 @@ def answer_question(
         "content": f"Context:\n\n{context}\n\nQuestion: {query}\n\n{reminder}",
     })
 
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=messages,
-        # Lowered from 0.3 - testing the REQUIRED COURSES rule showed real
-        # run-to-run variance in whether it was followed at 0.3; precision/
-        # consistency matters more here than answer variety.
-        temperature=0.2,
-    )
-
-    answer = response.choices[0].message.content
-
     sources = [
         {
             "course_code": c["course_code"],
@@ -278,7 +262,76 @@ def answer_question(
         for c in chunks
     ]
 
+    return messages, sources
+
+
+def answer_question(
+    query: str,
+    k: int = 8,
+    course_codes: list[str] | None = None,
+    history: list[dict] | None = None,
+    programme_codes: list[str] | None = None,
+) -> dict:
+    """`history` is prior turns as [{"role": "user"|"assistant", "content": str}, ...]
+    in chronological order, NOT including the current `query`. `programme_codes`
+    are the student's selected major(s) (e.g. from a frontend multi-select), if
+    any - see retrieve()'s docstring for how they combine with majors named in
+    the query/history text."""
+    built = _build_prompt(query, k, course_codes, history, programme_codes)
+    if built is None:
+        return {
+            "answer": "I couldn't find any relevant course data to answer that question.",
+            "sources": [],
+        }
+    messages, sources = built
+
+    client = _get_client()
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        # Lowered from 0.3 - testing the REQUIRED COURSES rule showed real
+        # run-to-run variance in whether it was followed at 0.3; precision/
+        # consistency matters more here than answer variety.
+        temperature=0.2,
+    )
+
+    answer = response.choices[0].message.content
     return {"answer": answer, "sources": sources}
+
+
+def stream_answer_question(
+    query: str,
+    k: int = 8,
+    course_codes: list[str] | None = None,
+    history: list[dict] | None = None,
+    programme_codes: list[str] | None = None,
+):
+    """Generator version of answer_question() for token-by-token streaming.
+    Yields exactly one {"type": "sources", "sources": [...]} event first
+    (so the frontend can render citations before/while tokens arrive), then
+    one {"type": "token", "text": <delta>} event per streamed chunk from the
+    OpenAI response. Same retrieval/prompt logic as answer_question() -
+    only the completion call differs."""
+    built = _build_prompt(query, k, course_codes, history, programme_codes)
+    if built is None:
+        yield {"type": "sources", "sources": []}
+        yield {"type": "token", "text": "I couldn't find any relevant course data to answer that question."}
+        return
+    messages, sources = built
+
+    yield {"type": "sources", "sources": sources}
+
+    client = _get_client()
+    stream = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        temperature=0.2,
+        stream=True,
+    )
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield {"type": "token", "text": delta}
 
 
 if __name__ == "__main__":

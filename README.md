@@ -33,21 +33,26 @@ configurable via `OPENAI_MODEL`) and embeddings (`text-embedding-3-small`,
 see `src/embeddings.py`) — there's no local model to download, both go
 through the OpenAI API.
 
-Build the data (pilot course list by default — see `PILOT_COURSE_CODES` in
-`src/scrape/disqus.py`):
+Build the data. This runs scrape -> clean -> chunk -> embed:
 
 ```bash
-./refresh.sh
-```
-
-This runs scrape -> clean -> chunk -> embed. To target specific courses or
-the full catalog:
-
-```bash
+./refresh.sh                # no args defaults to --all — full NUSMods catalog, slow, mind Disqus's ToS
 ./refresh.sh --courses CS2030,CS2040
-./refresh.sh --all          # full NUSMods catalog — slow, mind Disqus's ToS
-./refresh.sh --retry-failed # (re-)scrape only courses that failed last run
+./refresh.sh --all
+./refresh.sh --test         # fixed small test course list, good for a quick smoke test
+./refresh.sh --force        # ignore scrape cache freshness
 ```
+
+`disqus.py` itself defaults to a smaller pilot list (`PILOT_COURSE_CODES`)
+when run with no flags, but `refresh.sh` always forwards `--all` when called
+with no arguments, so the pilot list is never used via `refresh.sh` — pass
+`--courses` explicitly for a small run.
+
+Every run always does the full scrape -> clean -> chunk -> embed pipeline,
+regardless of flags — including `./refresh.sh --retry-failed`, which is
+mainly useful as its own explicit step after a partial failure; `refresh.sh`
+already re-runs `disqus.py --retry-failed` unconditionally as part of every
+invocation.
 
 Before a full `--all` run, warm the NUSMods metadata cache first — it has
 no rate limit and doesn't depend on Disqus, so this keeps that scrape's
@@ -213,8 +218,9 @@ backend ever reading a half-written directory:
 - **`./refresh_data.sh`** — the same staging + atomic-swap pattern, run
   locally (on the VM, or anywhere with the repo cloned and `docker
   compose` pointed at the VM's stack). Use this for a manual/ad-hoc
-  refresh: `./refresh_data.sh` (default pilot list), `./refresh_data.sh
-  --courses CS2030,CS2040`, or `./refresh_data.sh --all`.
+  refresh: `./refresh_data.sh` (defaults to `--all` — full catalog),
+  `./refresh_data.sh --courses CS2030,CS2040`, or `./refresh_data.sh
+  --all`.
 
 **`.github/workflows/scrape-test.yml`** is separate and lower-stakes:
 manual-only, scrapes a small fixed course list
