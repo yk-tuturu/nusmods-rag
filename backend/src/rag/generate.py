@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from src.rag.retriever import retrieve
+from src.rag.tools import TOOLS, run_tool
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(BACKEND_DIR / ".env")
@@ -27,6 +28,10 @@ MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 # (frontend) already trims what it sends, since token cost grows with every
 # turn otherwise.
 MAX_HISTORY_MESSAGES = 8
+
+# Upper bound on tool-call rounds per question. The round after the last
+# allowed one forces a plain answer (tool_choice="none").
+MAX_TOOL_ROUNDS = 2
 
 # General NUS academic background (terminology, university-wide
 # requirements, grading) that's small and universally relevant regardless
@@ -48,8 +53,9 @@ COMMON_KNOWLEDGE = (
 # section, and generate.py's per-turn reminder for the same reasoning
 # applied at the per-request level).
 SYSTEM_PROMPT = """You are a precise assistant answering questions about NUS courses and degree \
-programmes. Ground every answer strictly in the "Context" attached to the CURRENT question and \
-the background notes below - never in outside/pretrained knowledge, even for well-known facts.
+programmes. Ground every answer strictly in the "Context" attached to the CURRENT question, the \
+background notes below, and any tool results - never in outside/pretrained knowledge, even for \
+well-known facts.
 
 GROUNDING
 - Every factual claim, number, or quote must trace back to the Context attached to THIS \
@@ -96,6 +102,16 @@ major must take - describe it as an elective/focus-area option instead, even tho
 "programme" entry. Only make an individual-requirement claim when a "programme" entry actually \
 supports it for the major in question; if no programme Context is present, or it doesn't mention \
 the course, do not claim or deny that it's required - say you're unsure instead of guessing.
+
+TOOLS
+- check_prereqs: when the user says which courses they have completed and asks whether they can \
+take a course, call it instead of reasoning about prerequisites yourself. Its result is verified \
+fact and counts as Context (it may name course codes that are not in the retrieved Context). \
+Report it plainly: status "met" means they meet the prerequisites; "not_met" means list what is \
+in "missing"; "unknown" means the requirement depends on their cohort or programme, which you \
+cannot verify - open with "I can't confirm this", NEVER say they cannot take it, then explain \
+what it depends on and give the prerequisite text. Mention briefly that grades are \
+assumed to meet the minimum. If it returns an error, say you couldn't check rather than guessing.
 
 PRECISION AND STYLE
 - Answer the actual question first - lead with the specific number, requirement, or verdict \
@@ -178,9 +194,9 @@ def _build_prompt(
     context = format_context(chunks)
 
     reminder = (
-        "(Answer using only the Context above. Do not mention any course code "
-        "that isn't in it, whether from earlier in this conversation or from "
-        "general knowledge about NUS courses.)"
+        "(Answer using only the Context above and any tool results. Do not mention "
+        "any course code that isn't in them, whether from earlier in this "
+        "conversation or from general knowledge about NUS courses.)"
     )
     # Explicit disambiguation for "my major"/"my degree" style phrasing.
     # Course info/review chunks aren't affiliated with any particular major -
@@ -286,17 +302,45 @@ def answer_question(
     messages, sources = built
 
     client = _get_client()
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=messages,
-        # Lowered from 0.3 - testing the REQUIRED COURSES rule showed real
-        # run-to-run variance in whether it was followed at 0.3; precision/
-        # consistency matters more here than answer variety.
-        temperature=0.2,
-    )
+    for round_ in range(MAX_TOOL_ROUNDS + 1):
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            # Lowered from 0.3 - testing the REQUIRED COURSES rule showed real
+            # run-to-run variance in whether it was followed at 0.3; precision/
+            # consistency matters more here than answer variety.
+            temperature=0.2,
+            tools=TOOLS,
+            tool_choice="none" if round_ == MAX_TOOL_ROUNDS else "auto",
+        )
+        message = response.choices[0].message
+        if not message.tool_calls:
+            return {"answer": message.content, "sources": sources}
 
-    answer = response.choices[0].message.content
-    return {"answer": answer, "sources": sources}
+        calls = [
+            {"id": tc.id, "name": tc.function.name, "arguments": tc.function.arguments}
+            for tc in message.tool_calls
+        ]
+        _append_tool_round(messages, message.content, calls)
+
+
+def _append_tool_round(messages: list[dict], content: str | None, calls: list[dict]) -> None:
+    """Record the model's tool calls and run them, appending the assistant
+    message plus one tool-result message per call, as the API requires."""
+    messages.append({
+        "role": "assistant",
+        "content": content,
+        "tool_calls": [
+            {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}}
+            for c in calls
+        ],
+    })
+    for c in calls:
+        messages.append({
+            "role": "tool",
+            "tool_call_id": c["id"],
+            "content": run_tool(c["name"], c["arguments"]),
+        })
 
 
 def stream_answer_question(
@@ -322,16 +366,38 @@ def stream_answer_question(
     yield {"type": "sources", "sources": sources}
 
     client = _get_client()
-    stream = client.chat.completions.create(
-        model=MODEL,
-        messages=messages,
-        temperature=0.2,
-        stream=True,
-    )
-    for chunk in stream:
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield {"type": "token", "text": delta}
+    for round_ in range(MAX_TOOL_ROUNDS + 1):
+        stream = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            temperature=0.2,
+            stream=True,
+            tools=TOOLS,
+            tool_choice="none" if round_ == MAX_TOOL_ROUNDS else "auto",
+        )
+        text = ""
+        # Tool-call arguments arrive as fragments spread over many chunks,
+        # keyed by the call's index.
+        pending: dict[int, dict] = {}
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                text += delta.content
+                yield {"type": "token", "text": delta.content}
+            for tc in delta.tool_calls or []:
+                slot = pending.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+                if tc.id:
+                    slot["id"] = tc.id
+                if tc.function and tc.function.name:
+                    slot["name"] = tc.function.name
+                if tc.function and tc.function.arguments:
+                    slot["arguments"] += tc.function.arguments
+
+        if not pending:
+            return
+        _append_tool_round(messages, text or None, [pending[i] for i in sorted(pending)])
 
 
 if __name__ == "__main__":
