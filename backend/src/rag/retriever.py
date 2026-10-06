@@ -11,6 +11,9 @@ Retrieves relevant chunks from the Chroma collection for a user query.
   to "either course" and globally reranked can't guarantee both are
   actually represented, since one course's chunks can simply out-rank the
   other's and crowd it out of the top k entirely.
+- Every detected course's "info" chunk is always included (and listed
+  first), fetched by id if the similarity search didn't return it, so
+  prerequisite/credit/S-U facts never depend on outranking reviews.
 - Otherwise, semantic search runs across all chunks.
 - Ranking is still primarily semantic similarity, but nudged toward newer
   and non-reply-thread review chunks (see _rerank_score): we over-fetch
@@ -200,22 +203,45 @@ def _query_chunks(collection, query_embedding, fetch_n: int, where: dict | None 
     metadatas = result.get("metadatas", [[]])[0]
     distances = result.get("distances", [[]])[0]
 
-    chunks = []
-    for id_, doc, meta, dist in zip(ids, documents, metadatas, distances):
-        chunks.append({
-            "id": id_,
-            "text": doc,
-            "course_code": meta.get("course_code"),
-            "chunk_type": meta.get("chunk_type"),
-            "date": meta.get("date"),
-            "likes": meta.get("likes"),
-            "is_thread": bool(meta.get("is_thread")),
-            # Only meaningful on "programme" chunks (see chunk.py).
-            "programme_code": meta.get("programme_code") or None,
-            "section_title": meta.get("section_title") or None,
-            "distance": dist,
-        })
-    return chunks
+    return [
+        _to_chunk(id_, doc, meta, dist)
+        for id_, doc, meta, dist in zip(ids, documents, metadatas, distances)
+    ]
+
+
+def _to_chunk(id_: str, doc: str, meta: dict, distance: float | None) -> dict:
+    return {
+        "id": id_,
+        "text": doc,
+        "course_code": meta.get("course_code"),
+        "chunk_type": meta.get("chunk_type"),
+        "date": meta.get("date"),
+        "likes": meta.get("likes"),
+        "is_thread": bool(meta.get("is_thread")),
+        # Only meaningful on "programme" chunks (see chunk.py).
+        "programme_code": meta.get("programme_code") or None,
+        "section_title": meta.get("section_title") or None,
+        "distance": distance,
+    }
+
+
+def _pin_info_chunks(collection, chunks: list[dict], codes: list[str]) -> list[dict]:
+    """Put each detected course's "info" chunk (prereqs, MCs, S/U, ...) first
+    in the results, fetching it by id if the similarity search didn't return
+    it. Info chunks carry no recency bonus, so a prereq-style question could
+    otherwise have them outranked by recent reviews. A pinned chunk that
+    wasn't retrieved has distance None (it wasn't scored)."""
+    wanted = [f"{code}_info" for code in codes]
+    found = {c["id"]: c for c in chunks if c["id"] in wanted}
+
+    missing = [id_ for id_ in wanted if id_ not in found]
+    if missing:
+        result = collection.get(ids=missing)
+        for id_, doc, meta in zip(result["ids"], result["documents"], result["metadatas"]):
+            found[id_] = _to_chunk(id_, doc, meta, None)
+
+    pinned = [found[id_] for id_ in wanted if id_ in found]
+    return pinned + [c for c in chunks if c["id"] not in found]
 
 
 def _retrieve_programme_chunks(
@@ -263,10 +289,12 @@ def retrieve(
       comparison gets up to k chunks per course (not k split across them),
       and no single course's chunks can crowd another's out of the result
       entirely.
-    - No course code in the query itself and no explicit `course_codes` but
-      `history` is given: falls back to the most recent course code(s)
-      mentioned earlier in the conversation, so a follow-up question
-      inherits the course being discussed instead of losing the filter.
+    - No course code in the query and no explicit `course_codes`: an
+      unfiltered semantic search. This function does NOT inherit a course
+      from `history` - deciding whether a question is a follow-up about an
+      earlier course or a new topic needs judgement, so generate.py resolves
+      that and passes the result in as `course_codes`. (`history` here is
+      only used to infer a major, below.)
 
     Programme/degree-requirement chunks are then retrieved in a second pass
     and appended (deduplicated by id):
@@ -287,8 +315,6 @@ def retrieve(
     fetch_n = k * OVERFETCH_MULTIPLIER
 
     codes = list(course_codes) if course_codes else detect_course_codes(query)
-    if not codes and history:
-        codes = detect_course_codes_from_history(history)
 
     if len(codes) > 1:
         chunks = []
@@ -318,6 +344,9 @@ def retrieve(
         chunks.sort(key=_rerank_score)
         chunks = chunks[:k]
 
+    if codes:
+        chunks = _pin_info_chunks(collection, chunks, codes)
+
     detected_programme_codes = set(detect_programme_codes(query))
     if not detected_programme_codes and history:
         detected_programme_codes = set(detect_programme_codes_from_history(history))
@@ -343,4 +372,5 @@ if __name__ == "__main__":
     q = " ".join(sys.argv[1:]) or "is CS2030 hard for beginners?"
     for c in retrieve(q):
         label = c["course_code"] or f"{c['programme_code']}/{c['section_title']}"
-        print(f"[{c['chunk_type']}] {label} (dist={c['distance']:.3f}): {c['text'][:100]}...")
+        dist = "pinned" if c["distance"] is None else f"{c['distance']:.3f}"
+        print(f"[{c['chunk_type']}] {label} (dist={dist}): {c['text'][:100]}...")

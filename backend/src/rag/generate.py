@@ -9,13 +9,14 @@ answer plus the source chunks actually used, so callers can render
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from src.rag.retriever import retrieve
+from src.rag.retriever import detect_course_codes, detect_course_codes_from_history, retrieve
 from src.rag.tools import TOOLS, run_tool
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -170,6 +171,59 @@ def format_context(chunks: list[dict]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
+_SCOPE_PROMPT = """You decide which NUS course(s), if any, a student's NEW message is \
+specifically about, using the conversation so far.
+
+Return JSON: {"course_codes": [...]}
+
+- Include a course code only if the NEW message refers back to that course - by pronoun \
+("is it hard?"), ellipsis ("what about the workload?", "how many MCs?"), or position ("the \
+second one"). Use only codes that appear in the conversation.
+- Return [] if the NEW message is self-contained: asking for recommendations, asking about a \
+topic or skill ("courses about programming languages"), or switching to something new - even if \
+it is loosely related to courses discussed earlier. Course codes in the assistant's earlier \
+answers do NOT make the new message about them."""
+
+# Per-message cap in the scope-resolver transcript - long assistant answers
+# would otherwise dominate a prompt that only needs to see what was referred to.
+_SCOPE_MESSAGE_CHARS = 800
+
+
+def _resolve_followup_courses(query: str, history: list[dict]) -> list[str]:
+    """Which courses from earlier in the conversation (if any) this question
+    is a follow-up about. Only called when the question names no course
+    itself; costs one small LLM call, and only when history mentions a course
+    at all. Returned codes are validated against the conversation, so the
+    model can't introduce one. On failure, falls back to the courses the
+    user themselves most recently named."""
+    candidates: list[str] = []
+    for m in history:
+        for code in detect_course_codes(m["content"]):
+            if code not in candidates:
+                candidates.append(code)
+    if not candidates:
+        return []
+
+    transcript = "\n".join(
+        f"{m['role']}: {m['content'][:_SCOPE_MESSAGE_CHARS]}" for m in history
+    )
+    try:
+        response = _get_client().chat.completions.create(
+            model=MODEL,
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": _SCOPE_PROMPT},
+                {"role": "user", "content": f"Conversation:\n{transcript}\n\nNEW message: {query}"},
+            ],
+        )
+        picked = json.loads(response.choices[0].message.content).get("course_codes", [])
+        return [c.upper() for c in picked if isinstance(c, str) and c.upper() in candidates]
+    except Exception:
+        user_texts = [m["content"] for m in history if m["role"] == "user"]
+        return detect_course_codes_from_history(user_texts)
+
+
 def _build_prompt(
     query: str,
     k: int,
@@ -182,7 +236,13 @@ def _build_prompt(
     retrieval found nothing (callers should show the canned "couldn't find"
     response in that case)."""
     recent_history = (history or [])[-MAX_HISTORY_MESSAGES:]
-    history_texts = [m["content"] for m in recent_history]
+    # User turns only: the assistant's own replies name courses and majors
+    # (e.g. prerequisites it listed) that the user never asked about, and
+    # scanning them made each answer widen the scope of the next question.
+    history_texts = [m["content"] for m in recent_history if m["role"] == "user"]
+
+    if not course_codes and not detect_course_codes(query):
+        course_codes = _resolve_followup_courses(query, recent_history)
 
     chunks = retrieve(
         query, k=k, course_codes=course_codes, history=history_texts, programme_codes=programme_codes
